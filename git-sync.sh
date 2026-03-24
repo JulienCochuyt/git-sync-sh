@@ -1,0 +1,1802 @@
+#!/usr/bin/env bash
+# Copyright (C) 2026 Julien Cochuyt (https://github.com/JulienCochuyt)
+# SPDX-License-Identifier: GPL-2.0-only
+set -euo pipefail
+
+readonly COLOR_RED=$'\033[31m'
+readonly COLOR_GREEN=$'\033[32m'
+readonly COLOR_YELLOW=$'\033[33m'
+readonly COLOR_BLUE=$'\033[34m'
+readonly COLOR_CYAN=$'\033[36m'
+readonly COLOR_RESET=$'\033[0m'
+
+# Section color mapping (human-readable mode)
+readonly SECTION_COLOR_ONLY_IN_A="$COLOR_YELLOW"
+readonly SECTION_COLOR_ONLY_IN_B="$COLOR_CYAN"
+readonly SECTION_COLOR_DIFFERENT="$COLOR_RED"
+readonly SECTION_COLOR_BEHIND="$COLOR_YELLOW"
+readonly SECTION_COLOR_AHEAD="$COLOR_BLUE"
+readonly SECTION_COLOR_DIVERGED="$COLOR_RED"
+readonly SECTION_COLOR_IDENTICAL="$COLOR_GREEN"
+
+usage_main() {
+	cat <<'EOF'
+Usage:
+	git sync <command> [<args>]
+
+Commands:
+	status   Compare branches or tags across remotes or against the working copy.
+	align    Push branches or tags from source to target.
+	help     Show this help.
+
+For command-specific help:
+	git sync status --help
+	git sync align --help
+EOF
+}
+
+usage_status() {
+	cat <<'EOF'
+Usage:
+	git sync status [<options>]
+	git sync status [<options>] [@]<remote>
+	git sync status [<options>] [@]<remote> [@]<remote>
+
+	With no remote, uses the upstream of the current branch, or the
+	sole configured remote.
+	When one remote is given, compares local branches/tags against it.
+	When two remotes are given, compares them against each other.
+
+	By default, reads local tracking refs (refs/remotes/<remote>/*).
+	Prefix a remote with @ to query it live via git ls-remote instead.
+	For tags (-t), remotes are always queried via ls-remote.
+
+Options:
+	-p, --porcelain   Machine-readable output.
+	--name-only       Output only branch/tag names (one per line).
+	-a, --all         Include identical branches/tags details.
+	                  In single-remote mode, also shows branches/tags
+	                  only on the remote.
+
+	-t, --tags        Compare tags instead of branches.
+	-s, --subset <category[,category...]>
+	                  Restrict output to selected categories.
+	                  Categories: new, missing, different, behind,
+	                  ahead, diverged, same.
+	                  Prefix with + to add to or - to remove from the
+	                  default set (e.g. --subset +same, --subset -new).
+	                  Plain entries replace the defaults entirely.
+
+	                  Availability depends on which sides are local:
+	                    Both local:      behind, ahead, diverged (not different).
+	                    Local + @remote: behind or ahead (depending on which
+	                                     side is local) and different.
+	                    Both @remote:    different only.
+	                    --tags:          different only.
+	                  new, missing, and same are always available.
+
+	-i, --include <pattern>
+	                  Include branches/tags matching a shell glob pattern. Repeatable.
+	-I, --include-from <file>
+	                  Include glob patterns listed in <file> (one per line).
+	-x, --exclude <pattern>
+	                  Exclude branches/tags matching a shell glob pattern. Repeatable.
+	-X, --exclude-from <file>
+	                  Exclude glob patterns listed in <file> (one per line).
+
+	-h, --help        Show this help.
+
+Examples:
+	git sync status
+	git sync status origin
+	git sync status origin upstream
+	git sync status -t origin
+	git sync status -t origin upstream
+	git sync status -i 'release/*' -x 'release/tmp-*' origin upstream
+EOF
+}
+
+usage_align() {
+	cat <<'EOF'
+Usage:
+	git sync align [<options>] <source> <target>
+
+Options:
+	-n, --dry-run       Show actions without pushing.
+	-t, --tags          Align tags instead of branches.
+	--on-failure <strategy>
+	                    Failure strategy: continue, fail-fast, interactive.
+	                    Default: interactive.
+	-f, --force         Use --force for push attempts.
+	-F, --force-with-lease
+	                    Use --force-with-lease for push attempts.
+	-v, --verbose       Print git commands as they are executed.
+	-a, --all           Include all categories, including new (deletions).
+	                    Without --all or --subset new, refs only in the
+	                    target are excluded.
+	-y, --yes           Skip interactive confirmation before deleting
+	                    refs (category new).
+
+	-s, --subset <category[,category...]>
+	                    Restrict processing to selected categories.
+	                    Prefix with + to add to or - to remove from the
+	                    default set (e.g. --subset +new, --subset -missing).
+	                    Plain entries replace the defaults entirely.
+
+	                    Common categories:  new, missing.
+	                    Branches only:      behind, ahead, diverged.
+	                    Tags only:          different.
+
+	-i, --include <pattern>
+	                    Include branches/tags matching a shell glob pattern. Repeatable.
+	-I, --include-from <file>
+	                    Include glob patterns listed in <file> (one per line).
+	-x, --exclude <pattern>
+	                    Exclude branches/tags matching a shell glob pattern. Repeatable.
+	-X, --exclude-from <file>
+	                    Exclude glob patterns listed in <file> (one per line).
+
+	-h, --help          Show this help.
+
+Arguments:
+	<source> and <target> are remote names (e.g. origin, upstream).
+	For branches, local tracking refs are used for comparison;
+	pushes and deletions always target the real remote.
+	For tags, remotes are queried live via git ls-remote.
+
+Examples:
+	git sync align origin upstream
+	git sync align --dry-run --subset missing,behind origin upstream
+	git sync align -t origin upstream
+	git sync align --on-failure interactive --force-with-lease origin upstream
+EOF
+}
+
+# Short hint printed on usage errors instead of the full usage text.
+usage_hint() {
+	printf 'Use "%s --help" for detailed usage.\n' "$1" >&2
+}
+usage_hint_status() { usage_hint 'status'; }
+usage_hint_align()  { usage_hint 'align'; }
+
+sort_lines() {
+	if (($# == 0)); then
+		return
+	fi
+
+	printf '%s\n' "$@" | LC_ALL=C sort
+}
+
+print_colored_line() {
+	local prefix="$1"
+	local color="$2"
+	local text="$3"
+
+	if [[ -t 1 ]]; then
+		printf '%s%b%s%b\n' "$prefix" "$color" "$text" "$COLOR_RESET"
+	else
+		printf '%s%s\n' "$prefix" "$text"
+	fi
+}
+
+print_section() {
+	local title="$1"
+	local color="$2"
+	shift 2
+	local count=$#
+
+	printf '%s (%d)\n' "$title" "$count"
+	if (($# == 0)); then
+		print_colored_line '  ' "$color" '(none)'
+		return
+	fi
+
+	local ref
+	for ref in "$@"; do
+		print_colored_line '  ' "$color" "$ref"
+	done
+}
+
+# Format ref names with commit count annotations for directional categories.
+# For behind:   "ref  (N commits)"
+# For ahead:    "ref  (N commits)"
+# For diverged: "ref  (N behind, M ahead)"
+format_refs_with_counts() {
+	local category="$1"
+	local -n frc_behind_map="$2"
+	local -n frc_ahead_map="$3"
+	shift 3
+	local ref b a
+	for ref in "$@"; do
+		b="${frc_behind_map[$ref]:--}"
+		a="${frc_ahead_map[$ref]:--}"
+		case "$category" in
+			behind)
+				if [[ "$b" != '-' ]]; then
+					printf '%s  (%s commits)\n' "$ref" "$b"
+				else
+					printf '%s\n' "$ref"
+				fi
+				;;
+			ahead)
+				if [[ "$a" != '-' ]]; then
+					printf '%s  (%s commits)\n' "$ref" "$a"
+				else
+					printf '%s\n' "$ref"
+				fi
+				;;
+			diverged)
+				if [[ "$b" != '-' && "$a" != '-' ]]; then
+					printf '%s  (%s behind, %s ahead)\n' "$ref" "$b" "$a"
+				else
+					printf '%s\n' "$ref"
+				fi
+				;;
+		esac
+	done
+}
+
+# Output: <category>\t<ref>\t<source_hash>\t<target_hash>\t<behind_count>\t<ahead_count>
+# Unavailable fields use "-" as sentinel.
+print_porcelain_refs() {
+	local category="$1"
+	local -n pr_refs="$2"
+	local -n pr_src_map="$3"
+	local -n pr_tgt_map="$4"
+	local -n pr_behind_counts="$5"
+	local -n pr_ahead_counts="$6"
+
+	((${#pr_refs[@]})) || return 0
+
+	local -a sorted=()
+	local ref
+	mapfile -t sorted < <(sort_lines "${pr_refs[@]}")
+	for ref in "${sorted[@]}"; do
+		printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$category" "$ref" \
+			"${pr_src_map[$ref]:--}" "${pr_tgt_map[$ref]:--}" \
+			"${pr_behind_counts[$ref]:--}" "${pr_ahead_counts[$ref]:--}"
+	done
+}
+
+status_print_porcelain() {
+	local -n only_in_a_ref="$1"
+	local -n only_in_b_ref="$2"
+	local -n different_ref="$3"
+	local -n behind_ref="$4"
+	local -n ahead_ref="$5"
+	local -n diverged_ref="$6"
+	local -n identical_ref="$7"
+	local -n source_map_ref="$8"
+	local -n target_map_ref="$9"
+	local -n behind_count_ref="${10}"
+	local -n ahead_count_ref="${11}"
+
+	print_porcelain_refs 'missing'   only_in_a_ref  source_map_ref target_map_ref behind_count_ref ahead_count_ref
+	print_porcelain_refs 'new'       only_in_b_ref  source_map_ref target_map_ref behind_count_ref ahead_count_ref
+	print_porcelain_refs 'different' different_ref  source_map_ref target_map_ref behind_count_ref ahead_count_ref
+	print_porcelain_refs 'behind'    behind_ref     source_map_ref target_map_ref behind_count_ref ahead_count_ref
+	print_porcelain_refs 'ahead'     ahead_ref      source_map_ref target_map_ref behind_count_ref ahead_count_ref
+	print_porcelain_refs 'diverged'  diverged_ref   source_map_ref target_map_ref behind_count_ref ahead_count_ref
+	print_porcelain_refs 'same'      identical_ref  source_map_ref target_map_ref behind_count_ref ahead_count_ref
+}
+
+# Classify how target (hash_b) relates to source (hash_a):
+#   behind   = target is ancestor of source (fast-forwardable)
+#   ahead    = source is ancestor of target
+#   diverged = neither is ancestor of the other
+# Modes:
+#   full         — both sides local; behind/ahead/diverged all reliable.
+#   ahead-only   — B is local; only ahead is reliably detectable.
+#   behind-only  — A is local; only behind is reliably detectable.
+is_interactive_tty() {
+	[[ -t 0 ]]
+}
+
+classify_direction_relation() {
+	local hash_a="$1"
+	local hash_b="$2"
+	local mode="${3:-full}"
+
+	case "$mode" in
+		ahead-only)
+			# B is local — "ahead" (A ancestor of B) is always detectable
+			# because A's hash must be in B's local ancestry if true.
+			if git merge-base --is-ancestor "$hash_a" "$hash_b" >/dev/null 2>&1; then
+				printf 'ahead\n'
+			else
+				printf 'different\n'
+			fi
+			;;
+		behind-only)
+			# A is local — "behind" (B ancestor of A) is always detectable
+			# because B's hash must be in A's local ancestry if true.
+			if git merge-base --is-ancestor "$hash_b" "$hash_a" >/dev/null 2>&1; then
+				printf 'behind\n'
+			else
+				printf 'different\n'
+			fi
+			;;
+		*)
+			# full: both sides local — all categories available.
+			if git merge-base --is-ancestor "$hash_b" "$hash_a" >/dev/null 2>&1; then
+				printf 'behind\n'
+			elif git merge-base --is-ancestor "$hash_a" "$hash_b" >/dev/null 2>&1; then
+				printf 'ahead\n'
+			else
+				printf 'diverged\n'
+			fi
+			;;
+	esac
+}
+
+load_remote_heads() {
+	local remote="$1"
+	local -n out_map="$2"
+
+	local hash ref branch
+	while IFS=$'\t' read -r hash ref; do
+		[[ -z "$hash" || -z "$ref" ]] && continue
+		branch="${ref#refs/heads/}"
+		[[ "$branch" == "$ref" ]] && continue
+		out_map["$branch"]="$hash"
+	done < <(git ls-remote "$remote" 'refs/heads/*')
+}
+
+load_local_heads() {
+	local remote="$1"
+	local -n out_map="$2"
+
+	local hash ref branch
+	while IFS=$'\t' read -r hash ref; do
+		[[ -z "$hash" || -z "$ref" ]] && continue
+		branch="${ref#refs/remotes/${remote}/}"
+		[[ "$branch" == "$ref" ]] && continue
+		[[ "$branch" == "HEAD" ]] && continue
+		out_map["$branch"]="$hash"
+	done < <(git for-each-ref --format='%(objectname)%09%(refname)' "refs/remotes/${remote}")
+}
+
+load_worktree_heads() {
+	local -n out_map="$1"
+
+	local hash ref branch
+	while IFS=$'\t' read -r hash ref; do
+		[[ -z "$hash" || -z "$ref" ]] && continue
+		branch="${ref#refs/heads/}"
+		[[ "$branch" == "$ref" ]] && continue
+		out_map["$branch"]="$hash"
+	done < <(git for-each-ref --format='%(objectname)%09%(refname)' refs/heads)
+}
+
+# Resolve the default remote for the current branch.
+# Tries: 1) upstream remote of current branch, 2) sole configured remote.
+# Prints the remote name to stdout. Returns 1 if unable to resolve.
+resolve_default_remote() {
+	local branch
+	branch="$(git symbolic-ref --short HEAD 2>/dev/null)" || true
+
+	if [[ -n "$branch" ]]; then
+		local upstream_remote
+		upstream_remote="$(git config --get "branch.${branch}.remote" 2>/dev/null)" || true
+		if [[ -n "$upstream_remote" ]]; then
+			printf '%s\n' "$upstream_remote"
+			return 0
+		fi
+	fi
+
+	local -a remotes
+	mapfile -t remotes < <(git remote)
+	if ((${#remotes[@]} == 1)); then
+		printf '%s\n' "${remotes[0]}"
+		return 0
+	fi
+
+	return 1
+}
+
+# ls-remote lists annotated tags twice: the tag object and the peeled (^{}) commit.
+# We prefer the peeled hash so comparisons use the underlying commit.
+load_remote_tags() {
+	local remote="$1"
+	local -n out_map="$2"
+
+	local hash ref tag_name base_name
+	while IFS=$'\t' read -r hash ref; do
+		[[ -z "$hash" || -z "$ref" ]] && continue
+
+		if [[ "$ref" == refs/tags/*^{} ]]; then
+			base_name="${ref#refs/tags/}"
+			base_name="${base_name%^\{\}}"
+			out_map["$base_name"]="$hash"
+			continue
+		fi
+
+		tag_name="${ref#refs/tags/}"
+		[[ "$tag_name" == "$ref" ]] && continue
+		if [[ -z "${out_map[$tag_name]+x}" ]]; then
+			out_map["$tag_name"]="$hash"
+		fi
+	done < <(git ls-remote "$remote" 'refs/tags/*')
+}
+
+# %(*objectname) is the peeled hash for annotated tags, empty for lightweight.
+# Uses pipe delimiter (not tab) so empty %(*objectname) produces a real empty
+# field — consecutive IFS whitespace characters are folded by bash read.
+load_local_tags() {
+	local -n out_map="$1"
+
+	local object_hash peeled_hash ref tag_name selected_hash
+	while IFS='|' read -r object_hash peeled_hash ref; do
+		[[ -z "$object_hash" || -z "$ref" ]] && continue
+		tag_name="${ref#refs/tags/}"
+		[[ "$tag_name" == "$ref" ]] && continue
+
+		selected_hash="$object_hash"
+		if [[ -n "$peeled_hash" ]]; then
+			selected_hash="$peeled_hash"
+		fi
+
+		out_map["$tag_name"]="$selected_hash"
+	done < <(git for-each-ref --format='%(objectname)|%(*objectname)|%(refname)' refs/tags)
+}
+
+parse_remote_ref() {
+	local input_ref="$1"
+	local -n out_name="$2"
+	local -n out_source="$3"
+	local usage_fn="${4:-hint_status}"
+
+	if [[ "$input_ref" == @* ]]; then
+		out_source='remote'
+		out_name="${input_ref#@}"
+	else
+		out_source='local'
+		out_name="$input_ref"
+	fi
+
+	if [[ -z "$out_name" ]]; then
+		printf 'Invalid remote ref: %s\n\n' "$input_ref" >&2
+		"$usage_fn"
+		exit 1
+	fi
+}
+
+load_pattern_file() {
+	local file_path="$1"
+	local -n out_patterns="$2"
+	local usage_fn="${3:-hint_status}"
+
+	if [[ ! -r "$file_path" ]]; then
+		printf 'Cannot read pattern file: %s\n\n' "$file_path" >&2
+		"$usage_fn"
+		exit 1
+	fi
+
+	local line
+	# Handle any line ending: LF (Unix), CRLF (Windows), CR (old Mac).
+	# tr normalises CR-only and CRLF to plain LF before read processes it.
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		[[ -z "$line" ]] && continue
+		[[ "$line" =~ ^[[:space:]]*# ]] && continue
+		out_patterns+=("$line")
+	done < <(tr '\r' '\n' < "$file_path" | cat -s)
+}
+
+ref_is_included() {
+	local ref="$1"
+	local -n patterns_ref="$2"
+
+	if ((${#patterns_ref[@]} == 0)); then
+		return 0
+	fi
+
+	local pattern
+	for pattern in "${patterns_ref[@]}"; do
+		if [[ "$ref" == $pattern ]]; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+ref_is_excluded() {
+	local ref="$1"
+	local -n patterns_ref="$2"
+
+	local pattern
+	for pattern in "${patterns_ref[@]}"; do
+		if [[ "$ref" == $pattern ]]; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+load_ref_set() {
+	local ref_mode="$1"
+	local ref="$2"
+	local tags_mode="$3"
+	local -n target_map="$4"
+
+	if ((tags_mode == 1)); then
+		if [[ "$ref_mode" == 'remote' ]]; then
+			load_remote_tags "$ref" target_map
+		else
+			load_local_tags target_map
+		fi
+	else
+		if [[ "$ref_mode" == 'remote' ]]; then
+			load_remote_heads "$ref" target_map
+		elif [[ "$ref_mode" == 'worktree' ]]; then
+			load_worktree_heads target_map
+		else
+			load_local_heads "$ref" target_map
+		fi
+	fi
+}
+
+compute_ref_categories() {
+	local -n source_map_ref="$1"
+	local -n target_map_ref="$2"
+	local direction_mode="$3"
+	local -n included_patterns_ref="$4"
+	local -n excluded_patterns_ref="$5"
+	local -n only_in_a_ref="$6"
+	local -n only_in_b_ref="$7"
+	local -n different_ref="$8"
+	local -n behind_ref="$9"
+	local -n ahead_ref="${10}"
+	local -n diverged_ref="${11}"
+	local -n identical_ref="${12}"
+	local -n category_map_ref="${13}"
+	local -n behind_count_map_ref="${14}"
+	local -n ahead_count_map_ref="${15}"
+
+	local ref
+	for ref in "${!source_map_ref[@]}"; do
+		if ! ref_is_included "$ref" included_patterns_ref; then
+			continue
+		fi
+
+		if ref_is_excluded "$ref" excluded_patterns_ref; then
+			continue
+		fi
+
+		if [[ -z "${target_map_ref[$ref]+x}" ]]; then
+			only_in_a_ref+=("$ref")
+			category_map_ref["$ref"]='missing'
+		elif [[ "${source_map_ref[$ref]}" == "${target_map_ref[$ref]}" ]]; then
+			identical_ref+=("$ref")
+		else
+			if [[ "$direction_mode" == 'none' ]]; then
+				different_ref+=("$ref")
+				category_map_ref["$ref"]='different'
+			else
+				local _dir _left _right
+				_dir="$(classify_direction_relation "${source_map_ref[$ref]}" "${target_map_ref[$ref]}" "$direction_mode")"
+				case "$_dir" in
+					behind|ahead|diverged)
+						read -r _left _right < <(git rev-list --count --left-right "${source_map_ref[$ref]}...${target_map_ref[$ref]}" 2>/dev/null) || { _left='-'; _right='-'; }
+						behind_count_map_ref["$ref"]="$_left"
+						ahead_count_map_ref["$ref"]="$_right"
+						;;&
+					behind)
+						behind_ref+=("$ref")
+						category_map_ref["$ref"]='behind'
+						;;
+					ahead)
+						ahead_ref+=("$ref")
+						category_map_ref["$ref"]='ahead'
+						;;
+					different)
+						different_ref+=("$ref")
+						category_map_ref["$ref"]='different'
+						;;
+					*)
+						diverged_ref+=("$ref")
+						category_map_ref["$ref"]='diverged'
+						;;
+				esac
+			fi
+		fi
+	done
+
+	for ref in "${!target_map_ref[@]}"; do
+		if ! ref_is_included "$ref" included_patterns_ref; then
+			continue
+		fi
+
+		if ref_is_excluded "$ref" excluded_patterns_ref; then
+			continue
+		fi
+
+		if [[ -z "${source_map_ref[$ref]+x}" ]]; then
+			only_in_b_ref+=("$ref")
+			category_map_ref["$ref"]='new'
+		fi
+	done
+}
+
+apply_subset_filters() {
+	local -n subset_filters_ref="$1"
+	local -n only_in_a_ref="$2"
+	local -n only_in_b_ref="$3"
+	local -n different_ref="$4"
+	local -n behind_ref="$5"
+	local -n ahead_ref="$6"
+	local -n diverged_ref="$7"
+	local -n identical_ref="$8"
+
+	if ((${#subset_filters_ref[@]} == 0)); then
+		return
+	fi
+
+	[[ -n "${subset_filters_ref[missing]+x}" ]] || only_in_a_ref=()
+	[[ -n "${subset_filters_ref[new]+x}" ]] || only_in_b_ref=()
+	[[ -n "${subset_filters_ref[different]+x}" ]] || different_ref=()
+	[[ -n "${subset_filters_ref[behind]+x}" ]] || behind_ref=()
+	[[ -n "${subset_filters_ref[ahead]+x}" ]] || ahead_ref=()
+	[[ -n "${subset_filters_ref[diverged]+x}" ]] || diverged_ref=()
+	[[ -n "${subset_filters_ref[same]+x}" ]] || identical_ref=()
+}
+
+normalize_subset_category() {
+	local lower="${1,,}"
+	case "$lower" in
+		new|missing|different|same|behind|ahead|diverged)
+			printf '%s\n' "$lower"
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+# Strip leading and trailing whitespace using parameter expansion.
+trim_spaces() {
+	local value="$1"
+	value="${value#"${value%%[![:space:]]*}"}"
+	value="${value%"${value##*[![:space:]]}"}"
+	printf '%s\n' "$value"
+}
+
+add_subset_categories_or_exit() {
+	local raw_value="$1"
+	local -n out_plain="$2"
+	local -n out_add="$3"
+	local -n out_remove="$4"
+	local usage_fn="${5:-hint_status}"
+
+	local -a parts=()
+	local part trimmed normalized prefix
+	IFS=',' read -r -a parts <<< "$raw_value"
+
+	for part in "${parts[@]}"; do
+		trimmed="$(trim_spaces "$part")"
+		if [[ -z "$trimmed" ]]; then
+			printf 'Option --subset contains an empty category.\n\n' >&2
+			"$usage_fn"
+			exit 1
+		fi
+
+		prefix=''
+		if [[ "$trimmed" == +* ]]; then
+			prefix='+'
+			trimmed="${trimmed:1}"
+		elif [[ "$trimmed" == -* ]]; then
+			prefix='-'
+			trimmed="${trimmed:1}"
+		fi
+
+		if [[ -z "$trimmed" ]]; then
+			printf 'Option --subset contains an empty category after prefix.\n\n' >&2
+			"$usage_fn"
+			exit 1
+		fi
+
+		if ! normalized="$(normalize_subset_category "$trimmed")"; then
+			printf 'Unknown category: %s\n\n' "$trimmed" >&2
+			"$usage_fn"
+			exit 1
+		fi
+
+		case "$prefix" in
+			'+') out_add["$normalized"]=1 ;;
+			'-') out_remove["$normalized"]=1 ;;
+			*)   out_plain["$normalized"]=1 ;;
+		esac
+	done
+}
+
+# Resolve the final subset_filters map from parsed --subset entries.
+# 1. If plain entries exist, start from those.
+# 2. Otherwise, start from the default set.
+# 3. Add + entries.
+# 4. Remove - entries.
+resolve_subset_filters() {
+	local -n rs_plain="$1"
+	local -n rs_add="$2"
+	local -n rs_remove="$3"
+	local -n rs_defaults="$4"
+	local -n rs_out="$5"
+
+	# Start from plain entries if any, otherwise from defaults.
+	if ((${#rs_plain[@]} > 0)); then
+		local cat
+		for cat in "${!rs_plain[@]}"; do
+			rs_out["$cat"]=1
+		done
+	else
+		local cat
+		for cat in "${!rs_defaults[@]}"; do
+			rs_out["$cat"]=1
+		done
+	fi
+
+	# Apply additions.
+	local cat
+	for cat in "${!rs_add[@]}"; do
+		rs_out["$cat"]=1
+	done
+
+	# Apply removals.
+	local cat
+	for cat in "${!rs_remove[@]}"; do
+		unset 'rs_out[$cat]'
+	done
+}
+
+status_print_name_only() {
+	local -n refs="$1"
+	local -a sorted=()
+
+	if ((${#refs[@]} == 0)); then
+		return
+	fi
+
+	mapfile -t sorted < <(sort_lines "${refs[@]}")
+	printf '%s\n' "${sorted[@]}"
+}
+
+status_command() {
+	local porcelain=0
+	local show_all=0
+	local direction_mode='none'
+	local tags_mode=0
+	local name_only=0
+	local -a included_patterns=()
+	local -a excluded_patterns=()
+	local -A subset_plain=()
+	local -A subset_add=()
+	local -A subset_remove=()
+	local -A subset_filters=()
+	while (($# > 0)); do
+		# Expand combined short options (e.g., -ts → -t -s)
+		if [[ "$1" =~ ^-[a-zA-Z]{2,}$ ]]; then
+			local _combined="$1"
+			shift
+			local _k
+			for ((_k = ${#_combined} - 1; _k >= 1; _k--)); do
+				set -- "-${_combined:_k:1}" "$@"
+			done
+		fi
+		case "$1" in
+			-p|--porcelain)
+				porcelain=1
+				shift
+				;;
+			-t|--tags)
+				tags_mode=1
+				shift
+				;;
+			--name-only)
+				name_only=1
+				shift
+				;;
+			-s)
+				if (($# < 2)); then
+					printf 'Option -s requires a value.\n\n' >&2
+					usage_hint_status
+					exit 1
+				fi
+				add_subset_categories_or_exit "$2" subset_plain subset_add subset_remove hint_status
+				shift 2
+				;;
+			--subset=*)
+				add_subset_categories_or_exit "${1#--subset=}" subset_plain subset_add subset_remove hint_status
+				shift
+				;;
+			--subset)
+				if (($# < 2)); then
+					printf 'Option --subset requires a value.\n\n' >&2
+					usage_hint_status
+					exit 1
+				fi
+				add_subset_categories_or_exit "$2" subset_plain subset_add subset_remove hint_status
+				shift 2
+				;;
+			-a|--all)
+				show_all=1
+				shift
+				;;
+
+			-i)
+				if (($# < 2)); then
+					printf 'Option -i requires a value.\n\n' >&2
+					usage_hint_status
+					exit 1
+				fi
+				included_patterns+=("$2")
+				shift 2
+				;;
+			--include=*)
+				included_patterns+=("${1#--include=}")
+				shift
+				;;
+			--include)
+				if (($# < 2)); then
+					printf 'Option --include requires a value.\n\n' >&2
+					usage_hint_status
+					exit 1
+				fi
+				included_patterns+=("$2")
+				shift 2
+				;;
+			-I|--include-from)
+				if (($# < 2)); then
+					printf 'Option %s requires a file path.\n\n' "$1" >&2
+					usage_hint_status
+					exit 1
+				fi
+				load_pattern_file "$2" included_patterns hint_status
+				shift 2
+				;;
+			--include-from=*)
+				load_pattern_file "${1#--include-from=}" included_patterns hint_status
+				shift
+				;;
+			-x)
+				if (($# < 2)); then
+					printf 'Option -x requires a value.\n\n' >&2
+					usage_hint_status
+					exit 1
+				fi
+				excluded_patterns+=("$2")
+				shift 2
+				;;
+			--exclude=*)
+				excluded_patterns+=("${1#--exclude=}")
+				shift
+				;;
+			--exclude)
+				if (($# < 2)); then
+					printf 'Option --exclude requires a value.\n\n' >&2
+					usage_hint_status
+					exit 1
+				fi
+				excluded_patterns+=("$2")
+				shift 2
+				;;
+			--exclude-from=*)
+				load_pattern_file "${1#--exclude-from=}" excluded_patterns hint_status
+				shift
+				;;
+			-X|--exclude-from)
+				if (($# < 2)); then
+					printf 'Option %s requires a file path.\n\n' "$1" >&2
+					usage_hint_status
+					exit 1
+				fi
+				load_pattern_file "$2" excluded_patterns hint_status
+				shift 2
+				;;
+			--)
+				shift
+				break
+				;;
+			-h|--help)
+				usage_status
+				exit 0
+				;;
+			-*)
+				printf 'Unknown option for status: %s\n\n' "$1" >&2
+				usage_hint_status
+				exit 1
+				;;
+			*)
+				break
+				;;
+		esac
+	done
+
+	if (($# > 2)); then
+		printf 'status accepts at most two arguments.\n\n' >&2
+		usage_hint_status
+		exit 1
+	fi
+
+	if ((name_only == 1)) && ((porcelain == 1)); then
+		printf 'Options --name-only and --porcelain are mutually exclusive.\n\n' >&2
+		usage_hint_status
+		exit 1
+	fi
+
+	local remote_a_ref=''
+	local remote_b_ref=''
+	local remote_a_name=''
+	local remote_b_name=''
+	local remote_a_source=''
+	local remote_b_source=''
+
+	if (($# == 0)); then
+		local default_remote
+		if ! default_remote="$(resolve_default_remote)"; then
+			printf 'Cannot determine default remote. Set an upstream or specify a remote.\n\n' >&2
+			usage_hint_status
+			exit 1
+		fi
+		remote_a_ref='working copy'
+		remote_a_source='worktree'
+		if ((tags_mode == 1)); then
+			remote_b_ref="@${default_remote}"
+			parse_remote_ref "$remote_b_ref" remote_b_name remote_b_source hint_status
+		else
+			remote_b_ref="$default_remote"
+			parse_remote_ref "$remote_b_ref" remote_b_name remote_b_source hint_status
+		fi
+	elif (($# == 1)); then
+		remote_a_ref='working copy'
+		remote_a_source='worktree'
+		remote_b_ref="$1"
+		parse_remote_ref "$remote_b_ref" remote_b_name remote_b_source hint_status
+	else
+		remote_a_ref="$1"
+		remote_b_ref="$2"
+		parse_remote_ref "$remote_a_ref" remote_a_name remote_a_source hint_status
+		parse_remote_ref "$remote_b_ref" remote_b_name remote_b_source hint_status
+	fi
+
+	# In tags mode, force remote source for both sides (ls-remote).
+	# Accept plain names — @ prefix is optional for tags.
+	if ((tags_mode == 1)); then
+		local _a_was_local=0 _b_was_local=0
+		if [[ "$remote_a_source" != 'remote' ]] && [[ "$remote_a_source" != 'worktree' ]]; then
+			remote_a_source='remote'
+			_a_was_local=1
+		fi
+		if [[ "$remote_b_source" != 'remote' ]]; then
+			remote_b_source='remote'
+			_b_was_local=1
+		fi
+		# Warn when mixing @ and plain in a two-arg invocation.
+		if [[ "$remote_a_source" != 'worktree' ]] && ((_a_was_local != _b_was_local)) && ((porcelain == 0)); then
+			printf 'Note: tags are always queried via ls-remote; @ prefix is optional.\n' >&2
+		fi
+	fi
+
+	# Determine direction mode: full, ahead-only, behind-only, or none.
+	# full:         both sides local — behind/ahead/diverged all reliable.
+	# ahead-only:   B is local — only ahead reliably detectable.
+	# behind-only:  A is local — only behind reliably detectable.
+	# none:         both @remote or tags — no direction classification.
+	if ((tags_mode == 0)); then
+		local _a_local=0 _b_local=0
+		if [[ "$remote_a_source" == 'local' ]] || [[ "$remote_a_source" == 'worktree' ]]; then
+			_a_local=1
+		fi
+		if [[ "$remote_b_source" == 'local' ]]; then
+			_b_local=1
+		fi
+		if ((_a_local == 1)) && ((_b_local == 1)); then
+			direction_mode='full'
+		elif ((_b_local == 1)); then
+			direction_mode='ahead-only'
+		elif ((_a_local == 1)); then
+			direction_mode='behind-only'
+		fi
+	fi
+
+	# Resolve subset_filters from +/- modifiers if --subset was specified.
+	if ((${#subset_plain[@]} > 0)) || ((${#subset_add[@]} > 0)) || ((${#subset_remove[@]} > 0)); then
+		local -A subset_defaults=()
+		subset_defaults[missing]=1
+		subset_defaults[new]=1
+		case "$direction_mode" in
+			full)
+				subset_defaults[behind]=1
+				subset_defaults[ahead]=1
+				subset_defaults[diverged]=1
+				;;
+			ahead-only)
+				subset_defaults[ahead]=1
+				subset_defaults[different]=1
+				;;
+			behind-only)
+				subset_defaults[behind]=1
+				subset_defaults[different]=1
+				;;
+			*)
+				subset_defaults[different]=1
+				;;
+		esac
+		resolve_subset_filters subset_plain subset_add subset_remove subset_defaults subset_filters
+	fi
+
+	if ((${#subset_filters[@]} > 0)); then
+		# Validate category legality based on direction mode.
+		if [[ "$direction_mode" == 'none' ]] && { [[ -n "${subset_filters[behind]+x}" ]] || [[ -n "${subset_filters[ahead]+x}" ]] || [[ -n "${subset_filters[diverged]+x}" ]]; }; then
+			if ((tags_mode == 1)); then
+				printf 'Categories behind, ahead and diverged are unavailable with --tags.\n\n' >&2
+			else
+				printf 'Categories behind, ahead and diverged require local refs for at least one side.\n\n' >&2
+			fi
+			usage_hint_status
+			exit 1
+		fi
+		if [[ "$direction_mode" == 'ahead-only' ]] && { [[ -n "${subset_filters[behind]+x}" ]] || [[ -n "${subset_filters[diverged]+x}" ]]; }; then
+			printf 'Categories behind and diverged require local refs on both sides.\n\n' >&2
+			usage_hint_status
+			exit 1
+		fi
+		if [[ "$direction_mode" == 'behind-only' ]] && { [[ -n "${subset_filters[ahead]+x}" ]] || [[ -n "${subset_filters[diverged]+x}" ]]; }; then
+			printf 'Categories ahead and diverged require local refs on both sides.\n\n' >&2
+			usage_hint_status
+			exit 1
+		fi
+		if [[ "$direction_mode" == 'full' ]] && [[ -n "${subset_filters[different]+x}" ]]; then
+			printf 'Category different is unavailable when both sides have local refs; use behind, ahead, or diverged.\n\n' >&2
+			usage_hint_status
+			exit 1
+		fi
+	fi
+
+	declare -A ref_map_a=()
+	declare -A ref_map_b=()
+	load_ref_set "$remote_a_source" "$remote_a_name" "$tags_mode" ref_map_a
+	load_ref_set "$remote_b_source" "$remote_b_name" "$tags_mode" ref_map_b
+
+	local -a only_in_a=()
+	local -a only_in_b=()
+	local -a different=()
+	local -a behind=()
+	local -a ahead=()
+	local -a diverged=()
+	local -a identical=()
+	local -A category_by_ref=()
+	local -A behind_counts=()
+	local -A ahead_counts=()
+	local -a sorted_only_in_a=()
+	local -a sorted_only_in_b=()
+	local -a sorted_different=()
+	local -a sorted_behind=()
+	local -a sorted_ahead=()
+	local -a sorted_diverged=()
+	local -a sorted_identical=()
+
+	compute_ref_categories ref_map_a ref_map_b "$direction_mode" included_patterns excluded_patterns only_in_a only_in_b different behind ahead diverged identical category_by_ref behind_counts ahead_counts
+	apply_subset_filters subset_filters only_in_a only_in_b different behind ahead diverged identical
+
+	local show_new_details=1
+	if [[ "$remote_a_source" == 'worktree' ]] && ((show_all == 0)) && [[ -z "${subset_filters[new]+x}" ]]; then
+		show_new_details=0
+	fi
+
+	if ((name_only == 1)); then
+		if ((show_new_details == 1)); then
+			status_print_name_only only_in_b
+		fi
+		status_print_name_only only_in_a
+		status_print_name_only different
+		status_print_name_only behind
+		status_print_name_only ahead
+		status_print_name_only diverged
+
+		if ((show_all == 1)) || [[ -n "${subset_filters[same]+x}" ]]; then
+			status_print_name_only identical
+		fi
+		return
+	fi
+
+	if ((porcelain == 1)); then
+		local show_identical=0
+		if ((show_all == 1)) || [[ -n "${subset_filters[same]+x}" ]]; then
+			show_identical=1
+		fi
+
+		if ((show_identical == 1)); then
+			status_print_porcelain only_in_a only_in_b different behind ahead diverged identical ref_map_a ref_map_b behind_counts ahead_counts
+		else
+			local -a empty_identical=()
+			status_print_porcelain only_in_a only_in_b different behind ahead diverged empty_identical ref_map_a ref_map_b behind_counts ahead_counts
+		fi
+		return
+	fi
+
+	if ((${#only_in_a[@]} > 0)); then
+		mapfile -t sorted_only_in_a < <(sort_lines "${only_in_a[@]}")
+	fi
+
+	if ((${#only_in_b[@]} > 0)); then
+		mapfile -t sorted_only_in_b < <(sort_lines "${only_in_b[@]}")
+	fi
+
+	if ((${#different[@]} > 0)); then
+		mapfile -t sorted_different < <(sort_lines "${different[@]}")
+	fi
+
+	if ((${#behind[@]} > 0)); then
+		mapfile -t sorted_behind < <(sort_lines "${behind[@]}")
+	fi
+
+	if ((${#ahead[@]} > 0)); then
+		mapfile -t sorted_ahead < <(sort_lines "${ahead[@]}")
+	fi
+
+	if ((${#diverged[@]} > 0)); then
+		mapfile -t sorted_diverged < <(sort_lines "${diverged[@]}")
+	fi
+
+	if ((${#identical[@]} > 0)); then
+		mapfile -t sorted_identical < <(sort_lines "${identical[@]}")
+	fi
+
+	local printed_sections=0
+
+	if ((${#sorted_only_in_a[@]} > 0)); then
+		print_section "Missing: only in ${remote_a_ref}" "$SECTION_COLOR_ONLY_IN_A" "${sorted_only_in_a[@]}"
+		printed_sections=1
+	fi
+
+	if ((${#sorted_only_in_b[@]} > 0)) || ((${#only_in_b[@]} > 0 && show_new_details == 0)); then
+		if ((printed_sections == 1)); then
+			printf '\n'
+		fi
+		if ((show_new_details == 1)); then
+			print_section "New: only in ${remote_b_ref}" "$SECTION_COLOR_ONLY_IN_B" "${sorted_only_in_b[@]}"
+		else
+			printf 'New: only in %s (%d)\n' "$remote_b_ref" "${#only_in_b[@]}"
+			printf '  (Use --all or --subset=new for detailed list.)\n'
+		fi
+		printed_sections=1
+	fi
+
+	if ((${#sorted_different[@]} > 0)); then
+		if ((printed_sections == 1)); then
+			printf '\n'
+		fi
+		print_section "Different: between ${remote_a_ref} and ${remote_b_ref}" "$SECTION_COLOR_DIFFERENT" "${sorted_different[@]}"
+		printed_sections=1
+	fi
+
+	if ((${#sorted_behind[@]} > 0)); then
+		if ((printed_sections == 1)); then
+			printf '\n'
+		fi
+		local -a decorated_behind=()
+		mapfile -t decorated_behind < <(format_refs_with_counts behind behind_counts ahead_counts "${sorted_behind[@]}")
+		print_section "Behind: ${remote_b_ref} behind ${remote_a_ref}" "$SECTION_COLOR_BEHIND" "${decorated_behind[@]}"
+		printed_sections=1
+	fi
+
+	if ((${#sorted_ahead[@]} > 0)); then
+		if ((printed_sections == 1)); then
+			printf '\n'
+		fi
+		local -a decorated_ahead=()
+		mapfile -t decorated_ahead < <(format_refs_with_counts ahead behind_counts ahead_counts "${sorted_ahead[@]}")
+		print_section "Ahead: ${remote_b_ref} ahead of ${remote_a_ref}" "$SECTION_COLOR_AHEAD" "${decorated_ahead[@]}"
+		printed_sections=1
+	fi
+
+	if ((${#sorted_diverged[@]} > 0)); then
+		if ((printed_sections == 1)); then
+			printf '\n'
+		fi
+		local -a decorated_diverged=()
+		mapfile -t decorated_diverged < <(format_refs_with_counts diverged behind_counts ahead_counts "${sorted_diverged[@]}")
+		print_section "Diverged: between ${remote_a_ref} and ${remote_b_ref}" "$SECTION_COLOR_DIVERGED" "${decorated_diverged[@]}"
+		printed_sections=1
+	fi
+
+	if ((show_all == 1)) || [[ -n "${subset_filters[same]+x}" ]]; then
+		if ((${#sorted_identical[@]} > 0)); then
+			if ((printed_sections == 1)); then
+				printf '\n'
+			fi
+			print_section "Same: identical in ${remote_a_ref} and ${remote_b_ref}" "$SECTION_COLOR_IDENTICAL" "${sorted_identical[@]}"
+			printed_sections=1
+		fi
+	else
+		if ((${#identical[@]} > 0)); then
+			if ((printed_sections == 1)); then
+				printf '\n'
+			fi
+			printf 'Same: identical in %s and %s (%d)\n' "$remote_a_ref" "$remote_b_ref" "${#identical[@]}"
+			printf '  (Use --all or --subset=same for detailed list.)\n'
+			printed_sections=1
+		fi
+	fi
+
+	if ((printed_sections == 0)); then
+		if ((tags_mode == 1)); then
+			printf 'No tags to report.\n'
+		else
+			printf 'No branches to report.\n'
+		fi
+	fi
+}
+
+verbose_preview() {
+	local dry_run="$1"
+	local verbose="$2"
+	shift 2
+
+	((verbose)) || return 0
+	if ((dry_run)); then
+		printf 'dry-run: '
+	else
+		printf 'run: '
+	fi
+	printf '%q ' "$@"
+	printf '\n'
+}
+
+align_try_push() {
+	local target_remote="$1"
+	local ref_name="$2"
+	local ref_type="$3"
+	local source_hash="$4"
+	local force_mode="$5"
+	local dry_run="$6"
+	local verbose="${7:-0}"
+
+	local -a cmd=(git push)
+	case "$force_mode" in
+		force) cmd+=(--force) ;;
+		lease) cmd+=(--force-with-lease) ;;
+	esac
+	cmd+=("$target_remote" "${source_hash}:refs/${ref_type}/${ref_name}")
+
+	verbose_preview "$dry_run" "$verbose" "${cmd[@]}"
+	((dry_run)) && return 0
+	"${cmd[@]}"
+}
+
+align_delete_remote_ref() {
+	local target_remote="$1"
+	local ref_name="$2"
+	local ref_type="$3"
+	local dry_run="${4:-0}"
+	local verbose="${5:-0}"
+
+	local -a cmd=(git push "$target_remote" ":refs/${ref_type}/${ref_name}")
+
+	verbose_preview "$dry_run" "$verbose" "${cmd[@]}"
+	((dry_run)) && return 0
+	"${cmd[@]}"
+}
+
+align_command() {
+	local dry_run=0
+	local tags_mode=0
+	local verbose=0
+	local show_all=0
+	local yes_mode=0
+	local on_failure='interactive'
+	local force_mode='push'
+	local -a included_patterns=()
+	local -a excluded_patterns=()
+	local -A subset_plain=()
+	local -A subset_add=()
+	local -A subset_remove=()
+	local -A subset_filters=()
+
+	while (($# > 0)); do
+		# Expand combined short options (e.g., -nvt → -n -v -t)
+		if [[ "$1" =~ ^-[a-zA-Z]{2,}$ ]]; then
+			local _combined="$1"
+			shift
+			local _k
+			for ((_k = ${#_combined} - 1; _k >= 1; _k--)); do
+				set -- "-${_combined:_k:1}" "$@"
+			done
+		fi
+		case "$1" in
+			-n|--dry-run)
+				dry_run=1
+				shift
+				;;
+			-v|--verbose)
+				verbose=1
+				shift
+				;;
+			-t|--tags)
+				tags_mode=1
+				shift
+				;;
+			-a|--all)
+				show_all=1
+				shift
+				;;
+			-y|--yes)
+				yes_mode=1
+				shift
+				;;
+			--on-failure=*)
+				on_failure="${1#--on-failure=}"
+				shift
+				;;
+			--on-failure)
+				if (($# < 2)); then
+					printf 'Option --on-failure requires a value.\n\n' >&2
+					usage_hint_align
+					exit 1
+				fi
+				on_failure="$2"
+				shift 2
+				;;
+			-f|--force)
+				if [[ "$force_mode" == 'lease' ]]; then
+					printf 'Options --force and --force-with-lease are mutually exclusive.\n\n' >&2
+					usage_hint_align
+					exit 1
+				fi
+				force_mode='force'
+				shift
+				;;
+			-F|--force-with-lease)
+				if [[ "$force_mode" == 'force' ]]; then
+					printf 'Options --force and --force-with-lease are mutually exclusive.\n\n' >&2
+					usage_hint_align
+					exit 1
+				fi
+				force_mode='lease'
+				shift
+				;;
+			-s)
+				if (($# < 2)); then
+					printf 'Option -s requires a value.\n\n' >&2
+					usage_hint_align
+					exit 1
+				fi
+				add_subset_categories_or_exit "$2" subset_plain subset_add subset_remove hint_align
+				shift 2
+				;;
+			--subset=*)
+				add_subset_categories_or_exit "${1#--subset=}" subset_plain subset_add subset_remove hint_align
+				shift
+				;;
+			--subset)
+				if (($# < 2)); then
+					printf 'Option --subset requires a value.\n\n' >&2
+					usage_hint_align
+					exit 1
+				fi
+				add_subset_categories_or_exit "$2" subset_plain subset_add subset_remove hint_align
+				shift 2
+				;;
+			-i)
+				if (($# < 2)); then
+					printf 'Option -i requires a value.\n\n' >&2
+					usage_hint_align
+					exit 1
+				fi
+				included_patterns+=("$2")
+				shift 2
+				;;
+			--include=*)
+				included_patterns+=("${1#--include=}")
+				shift
+				;;
+			--include)
+				if (($# < 2)); then
+					printf 'Option --include requires a value.\n\n' >&2
+					usage_hint_align
+					exit 1
+				fi
+				included_patterns+=("$2")
+				shift 2
+				;;
+			-I|--include-from)
+				if (($# < 2)); then
+					printf 'Option %s requires a file path.\n\n' "$1" >&2
+					usage_hint_align
+					exit 1
+				fi
+				load_pattern_file "$2" included_patterns hint_align
+				shift 2
+				;;
+			--include-from=*)
+				load_pattern_file "${1#--include-from=}" included_patterns hint_align
+				shift
+				;;
+			-x)
+				if (($# < 2)); then
+					printf 'Option -x requires a value.\n\n' >&2
+					usage_hint_align
+					exit 1
+				fi
+				excluded_patterns+=("$2")
+				shift 2
+				;;
+			--exclude=*)
+				excluded_patterns+=("${1#--exclude=}")
+				shift
+				;;
+			--exclude)
+				if (($# < 2)); then
+					printf 'Option --exclude requires a value.\n\n' >&2
+					usage_hint_align
+					exit 1
+				fi
+				excluded_patterns+=("$2")
+				shift 2
+				;;
+			-X|--exclude-from)
+				if (($# < 2)); then
+					printf 'Option %s requires a file path.\n\n' "$1" >&2
+					usage_hint_align
+					exit 1
+				fi
+				load_pattern_file "$2" excluded_patterns hint_align
+				shift 2
+				;;
+			--exclude-from=*)
+				load_pattern_file "${1#--exclude-from=}" excluded_patterns hint_align
+				shift
+				;;
+			--)
+				shift
+				break
+				;;
+			-h|--help)
+				usage_align
+				exit 0
+				;;
+			-*)
+				printf 'Unknown option for align: %s\n\n' "$1" >&2
+				usage_hint_align
+				exit 1
+				;;
+			*)
+				break
+				;;
+		esac
+	done
+
+	case "$on_failure" in
+		continue|fail-fast|interactive)
+			;;
+		*)
+			printf 'Unknown value for --on-failure: %s\n\n' "$on_failure" >&2
+			usage_hint_align
+			exit 1
+			;;
+	esac
+
+	if (($# != 2)); then
+		printf 'align requires exactly two arguments: <source> <target>.\n\n' >&2
+		usage_hint_align
+		exit 1
+	fi
+
+	local source_ref="$1"
+	local target_ref="$2"
+	local source_name=''
+	local target_name=''
+
+	if [[ "$source_ref" == @* ]] || [[ "$target_ref" == @* ]]; then
+		printf 'The @ prefix is not supported for align. Use plain remote names.\n\n' >&2
+		usage_hint_align
+		exit 1
+	fi
+
+	source_name="$source_ref"
+	target_name="$target_ref"
+
+	# Determine direction mode and source_mode/target_mode.
+	# Branches: always use local tracking refs, direction=full.
+	# Tags: always ls-remote, direction=none.
+	local direction_mode='none'
+	local source_mode='local'
+	local target_mode='local'
+	if ((tags_mode == 1)); then
+		source_mode='remote'
+		target_mode='remote'
+	else
+		direction_mode='full'
+	fi
+
+	# Resolve subset_filters from +/- modifiers if --subset was specified.
+	if ((${#subset_plain[@]} > 0)) || ((${#subset_add[@]} > 0)) || ((${#subset_remove[@]} > 0)); then
+		local -A subset_defaults=()
+		subset_defaults[missing]=1
+		if ((tags_mode == 0)); then
+			subset_defaults[behind]=1
+			subset_defaults[ahead]=1
+			subset_defaults[diverged]=1
+		else
+			subset_defaults[different]=1
+		fi
+		resolve_subset_filters subset_plain subset_add subset_remove subset_defaults subset_filters
+	fi
+
+	if [[ -n "${subset_filters[same]+x}" ]]; then
+		if ((tags_mode == 1)); then
+			printf 'Category same is unavailable for align; identical tags do not require alignment.\n\n' >&2
+		else
+			printf 'Category same is unavailable for align; identical branches do not require alignment.\n\n' >&2
+		fi
+		usage_hint_align
+		exit 1
+	fi
+
+	# Validate category legality based on direction mode.
+	if ((tags_mode == 1)) && { [[ -n "${subset_filters[behind]+x}" ]] || [[ -n "${subset_filters[ahead]+x}" ]] || [[ -n "${subset_filters[diverged]+x}" ]]; }; then
+		printf 'Categories behind, ahead and diverged are unavailable with --tags.\n\n' >&2
+		usage_hint_align
+		exit 1
+	fi
+	if ((tags_mode == 0)) && [[ -n "${subset_filters[different]+x}" ]]; then
+		printf 'Category different is unavailable for branches; use behind, ahead, or diverged.\n\n' >&2
+		usage_hint_align
+		exit 1
+	fi
+
+	declare -A ref_map_a=()
+	declare -A ref_map_b=()
+	load_ref_set "$source_mode" "$source_name" "$tags_mode" ref_map_a
+	load_ref_set "$target_mode" "$target_name" "$tags_mode" ref_map_b
+
+	local -a only_in_a=()
+	local -a only_in_b=()
+	local -a different=()
+	local -a behind=()
+	local -a ahead=()
+	local -a diverged=()
+	local -a identical=()
+	declare -A category_by_ref=()
+	declare -A behind_counts=()
+	declare -A ahead_counts=()
+
+	compute_ref_categories ref_map_a ref_map_b "$direction_mode" included_patterns excluded_patterns only_in_a only_in_b different behind ahead diverged identical category_by_ref behind_counts ahead_counts
+	apply_subset_filters subset_filters only_in_a only_in_b different behind ahead diverged identical
+
+	# Exclude new (deletions) by default unless --all or --subset new.
+	if ((show_all == 0)) && [[ -z "${subset_filters[new]+x}" ]]; then
+		only_in_b=()
+	fi
+
+	local -a candidates=()
+	candidates+=("${only_in_a[@]}")
+	candidates+=("${only_in_b[@]}")
+	candidates+=("${different[@]}")
+	candidates+=("${behind[@]}")
+	candidates+=("${ahead[@]}")
+	candidates+=("${diverged[@]}")
+
+	if ((${#candidates[@]} > 0)); then
+		mapfile -t candidates < <(sort_lines "${candidates[@]}")
+	fi
+
+	if ((${#candidates[@]} == 0)); then
+		if ((tags_mode == 1)); then
+			printf 'No tags to align.\n'
+		else
+			printf 'No branches to align.\n'
+		fi
+		return 0
+	fi
+
+	local pushed=0
+	local deleted=0
+	local forced=0
+	local skipped=0
+	local failed=0
+	local abort_all=0
+	local source_hash action category current_mode answer
+	local push_label='branch'
+	if ((tags_mode == 1)); then
+		push_label='tag'
+	fi
+
+	local ref_type='heads'
+	if ((tags_mode)); then
+		ref_type='tags'
+	fi
+
+	for ref in "${candidates[@]}"; do
+		category="${category_by_ref[$ref]}"
+		current_mode="$force_mode"
+		source_hash=''
+		action='push'
+
+		if [[ "$category" == 'new' ]]; then
+			source_hash="${ref_map_b[$ref]}"
+			action='delete'
+		else
+			source_hash="${ref_map_a[$ref]}"
+			case "$category" in
+				missing)  action='push' ;;
+				behind)   action='forward' ;;
+				*)        action="$current_mode" ;;
+			esac
+		fi
+
+		printf '%s\t%s\t%s\t%s\n' "$category" "$action" "$ref" "$source_hash"
+
+		# Confirm before deleting unless --yes or --dry-run.
+		if [[ "$category" == 'new' ]] && ((dry_run == 0)) && ((yes_mode == 0)); then
+			if is_interactive_tty; then
+				local confirm=''
+				printf 'Delete %s %s from %s? [y]es/[n]o/[a]ll yes/[c]ancel: ' "$push_label" "$ref" "$target_ref" >&2
+				if ! IFS= read -r confirm; then
+					confirm='c'
+				fi
+				case "$confirm" in
+					y|Y) : ;;
+					a|A)
+						yes_mode=1
+						;;
+					n|N)
+						((skipped += 1))
+						printf 'skipped\t%s\t%s\n' "$category" "$ref"
+						continue
+						;;
+					c|C)
+						printf 'Cancelled by user.\n' >&2
+						abort_all=1
+						break
+						;;
+					*)
+						printf 'Unknown choice: %s — skipping.\n' "$confirm" >&2
+						((skipped += 1))
+						printf 'skipped\t%s\t%s\n' "$category" "$ref"
+						continue
+						;;
+				esac
+			else
+				printf 'Refusing to delete %s %s without confirmation (non-interactive, use --yes).\n' "$push_label" "$ref" >&2
+				((skipped += 1))
+				printf 'skipped\t%s\t%s\n' "$category" "$ref"
+				continue
+			fi
+		fi
+
+		while true; do
+			local failure_mode="$current_mode"
+			local op_ok=true
+
+			if [[ "$category" == 'new' ]]; then
+				failure_mode='delete'
+				align_delete_remote_ref "$target_name" "$ref" "$ref_type" "$dry_run" "$verbose" || op_ok=false
+			else
+				align_try_push "$target_name" "$ref" "$ref_type" "$source_hash" "$current_mode" "$dry_run" "$verbose" || op_ok=false
+			fi
+
+			if $op_ok; then
+				if [[ "$category" == 'new' ]]; then
+					((deleted += 1))
+				elif [[ "$current_mode" == 'push' ]]; then
+					((pushed += 1))
+				else
+					((forced += 1))
+				fi
+				if ((dry_run == 0)); then
+					printf 'done: %s\n' "$ref"
+				fi
+				break
+			fi
+
+			if [[ "$on_failure" == 'fail-fast' ]]; then
+				((failed += 1))
+				abort_all=1
+				printf 'failed: %s (%s)\n' "$ref" "$failure_mode" >&2
+				break
+			fi
+
+			if [[ "$on_failure" == 'continue' ]]; then
+				((failed += 1))
+				printf 'failed: %s (%s)\n' "$ref" "$failure_mode" >&2
+				break
+			fi
+
+			if ! is_interactive_tty; then
+				((failed += 1))
+				printf 'failed: %s (%s, non-interactive)\n' "$ref" "$failure_mode" >&2
+				break
+			fi
+
+			if [[ "$category" == 'new' ]]; then
+				((failed += 1))
+				printf 'failed: %s (%s)\n' "$ref" "$failure_mode" >&2
+				printf 'hint: Delete failures are server-side; force/lease do not apply to deletions.\n' >&2
+				printf 'hint: If the branch is the remote current branch (HEAD), deletion is denied by the remote.\n' >&2
+				break
+			fi
+
+			printf 'Push failed for %s %s (%s). [r]etry/[p]ush/[f]orce/[l]ease/[s]kip/[c]ancel: ' "$push_label" "$ref" "$category" >&2
+			if ! IFS= read -r answer; then
+				answer='c'
+			fi
+			case "$answer" in
+				r|R) : ;;
+				p|P) current_mode='push' ;;
+				f|F) current_mode='force' ;;
+				l|L) current_mode='lease' ;;
+				s|S)
+					((skipped += 1))
+					printf 'skipped\t%s\t%s\n' "$category" "$ref"
+					break
+					;;
+				c|C)
+					((failed += 1))
+					abort_all=1
+					printf 'failed: %s (%s)\n' "$ref" "$failure_mode" >&2
+					break
+					;;
+				*)
+					printf 'Unknown choice: %s\n' "$answer" >&2
+					;;
+			esac
+		done
+
+		if ((abort_all == 1)); then
+			break
+		fi
+	done
+
+	printf '\n'
+	if ((dry_run == 1)); then
+		printf 'Plan\n'
+		printf '\t%d to delete\n' "$deleted"
+		printf '\t%d to push\n' "$pushed"
+		printf '\t%d to force\n' "$forced"
+	else
+		printf 'Summary\n'
+		printf '\t%d deleted\n' "$deleted"
+		printf '\t%d pushed\n' "$pushed"
+		printf '\t%d forced\n' "$forced"
+		printf '\t%d skipped\n' "$skipped"
+		printf '\t%d failed\n' "$failed"
+	fi
+
+	if ((failed > 0)); then
+		return 1
+	fi
+
+	return 0
+}
+
+main() {
+	if (($# == 0)); then
+		usage_main
+		exit 1
+	fi
+
+	local command="$1"
+	shift
+
+	case "$command" in
+		status)
+			status_command "$@"
+			;;
+		align)
+			align_command "$@"
+			;;
+		-h|--help|help)
+			usage_main
+			;;
+		*)
+			printf 'Unknown command: %s\n\n' "$command" >&2
+			usage_main
+			exit 1
+			;;
+	esac
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+	main "$@"
+fi
