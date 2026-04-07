@@ -121,6 +121,7 @@ Each ref is classified into exactly one category:
 Use `--subset` to restrict which categories are reported (`status`) or processed (`align`). Categories can be combined with commas. Prefix with `+` to add to, or `-` to remove from, the default set. Plain entries replace the defaults entirely.
 
 - **`status`** defaults to all categories except `same`. Use `--all` or `--subset +same` to include it.
+  `--porcelain` and `--name-only` always emit all categories; use `--subset -same` to exclude `same`.
 - **`align`** defaults to all categories except `new` and `same`. Use `--all` or `--subset +new` to include deletions. `same` is never valid for `align`.
 
 ## Tests

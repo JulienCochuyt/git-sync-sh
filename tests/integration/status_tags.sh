@@ -76,10 +76,13 @@ assert_contains "$out3" 'Different: between' \
 	&& assert_contains "$out3" 'diff_tag' \
 	&& end_test_ok
 
-begin_test 'status -t: identical tag hidden by default'
+begin_test 'status -t: identical tags expanded by default when few'
 local out4
 out4="$(bash "$SCRIPT_UNDER_TEST" status -t "$src" "$tgt")"
-assert_contains "$out4" '(Use --all or --subset=same for detailed list.)' && end_test_ok
+assert_contains "$out4" 'Same: identical in' \
+	&& assert_contains "$out4" 'shared_tag' \
+	&& assert_contains "$out4" 'anno_tag' \
+	&& end_test_ok
 
 begin_test 'status -t --all: identical tags listed'
 local out5
@@ -92,7 +95,7 @@ assert_contains "$out5" 'Same: identical in' \
 begin_test 'status -t: annotated tag peeling matches correctly'
 # Annotated tags should compare peeled (commit) hashes, so anno_tag should be identical
 local out6
-out6="$(bash "$SCRIPT_UNDER_TEST" status -t --all --name-only "$src" "$tgt")"
+out6="$(bash "$SCRIPT_UNDER_TEST" status -t --name-only "$src" "$tgt")"
 assert_contains "$out6" 'anno_tag' && end_test_ok
 
 begin_test 'status -t: --subset behind rejected with tags'
@@ -117,7 +120,7 @@ assert_contains "$out7" 'No tags to report.' && end_test_ok
 
 begin_test 'status -t: porcelain output'
 local out8
-out8="$(bash "$SCRIPT_UNDER_TEST" status -t -p --all "$src" "$tgt")"
+out8="$(bash "$SCRIPT_UNDER_TEST" status -t -p "$src" "$tgt")"
 assert_contains "$out8" 'missing' \
 	&& assert_contains "$out8" 'new' \
 	&& assert_contains "$out8" 'different' \
@@ -134,9 +137,9 @@ assert_contains "$out9" 'shared_tag' \
 
 begin_test 'status -t: plain and @ names are equivalent'
 local out_plain
-out_plain="$(bash "$SCRIPT_UNDER_TEST" status -t --name-only --all "$src" "$tgt" 2>/dev/null)"
+out_plain="$(bash "$SCRIPT_UNDER_TEST" status -t --name-only "$src" "$tgt" 2>/dev/null)"
 local out_at
-out_at="$(bash "$SCRIPT_UNDER_TEST" status -t --name-only --all "@${bare_a}" "@${bare_b}" 2>/dev/null)"
+out_at="$(bash "$SCRIPT_UNDER_TEST" status -t --name-only "@${bare_a}" "@${bare_b}" 2>/dev/null)"
 assert_eq "$out_plain" "$out_at" && end_test_ok
 
 begin_test 'status -t --all: does not print "No tags to report" when same tags exist'

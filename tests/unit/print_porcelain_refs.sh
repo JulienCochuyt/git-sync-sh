@@ -9,18 +9,17 @@ source "$SCRIPT_UNDER_TEST"
 
 run_tests() {
 
-begin_test 'print_porcelain_refs: empty array prints nothing'
-local -a refs=()
+begin_test 'print_porcelain_refs: empty string prints nothing'
 declare -A src=() tgt=() bc=() ac=()
-out="$(print_porcelain_refs 'missing' refs src tgt bc ac)"
+out="$(print_porcelain_refs 'missing' '' src tgt bc ac)"
 assert_eq '' "$out" && end_test_ok
 
 begin_test 'print_porcelain_refs: prints sorted category lines'
-local -a refs2=('beta' 'alpha')
+local refs_str=$'beta\nalpha'
 declare -A src2=([alpha]='aaa' [beta]='bbb')
 declare -A tgt2=([alpha]='ccc' [beta]='ddd')
 declare -A bc2=([alpha]='3' [beta]='0') ac2=([alpha]='5' [beta]='2')
-out="$(print_porcelain_refs 'different' refs2 src2 tgt2 bc2 ac2)"
+out="$(print_porcelain_refs 'different' "$refs_str" src2 tgt2 bc2 ac2)"
 line1="$(echo "$out" | head -1)"
 line2="$(echo "$out" | tail -1)"
 assert_contains "$line1" $'different\talpha\taaa\tccc\t3\t5' \
@@ -28,11 +27,11 @@ assert_contains "$line1" $'different\talpha\taaa\tccc\t3\t5' \
 	&& end_test_ok
 
 begin_test 'print_porcelain_refs: missing source uses -'
-local -a refs3=('only_tgt')
+local refs_str3='only_tgt'
 declare -A src3=()
 declare -A tgt3=([only_tgt]='eee')
 declare -A bc3=() ac3=()
-out="$(print_porcelain_refs 'new' refs3 src3 tgt3 bc3 ac3)"
+out="$(print_porcelain_refs 'new' "$refs_str3" src3 tgt3 bc3 ac3)"
 assert_contains "$out" $'new\tonly_tgt\t-\teee\t-\t-' && end_test_ok
 
 report_results

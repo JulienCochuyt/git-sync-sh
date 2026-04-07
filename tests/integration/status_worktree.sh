@@ -72,14 +72,16 @@ assert_contains "$out2" 'Missing: only in working copy' \
 	&& assert_contains "$out2" 'local_only_br' \
 	&& end_test_ok
 
-begin_test 'status: single-arg hides new by default with hint'
+begin_test 'status: single-arg expands new by default when few'
 local out3
 out3="$(bash "$SCRIPT_UNDER_TEST" status origin)"
 assert_contains "$out3" 'New: only in origin (1)' \
-	&& assert_contains "$out3" '(Use --all or --subset=new for detailed list.)' \
+	&& assert_contains "$out3" 'remote_only_br' \
 	&& end_test_ok
 
 begin_test 'status: single-arg --all shows new details'
+# Note: with only 1 new ref, threshold expansion (test above) produces the
+# same result.  --all is tested distinctly because it bypasses thresholds.
 local out4
 out4="$(bash "$SCRIPT_UNDER_TEST" status --all origin)"
 assert_contains "$out4" 'New: only in origin' \
@@ -98,19 +100,20 @@ assert_contains "$out6" 'new' \
 	&& assert_contains "$out6" 'remote_only_br' \
 	&& end_test_ok
 
-begin_test 'status: single-arg identical branches hidden with hint'
+begin_test 'status: single-arg identical branches expanded when few'
 local out7
 out7="$(bash "$SCRIPT_UNDER_TEST" status origin)"
 assert_contains "$out7" 'Same: identical in working copy and origin' \
-	&& assert_contains "$out7" '(Use --all or --subset=same for detailed list.)' \
+	&& assert_contains "$out7" 'same_br' \
 	&& end_test_ok
 
-begin_test 'status: single-arg --name-only excludes new by default'
+begin_test 'status: single-arg --name-only includes all categories'
 local out8
 out8="$(bash "$SCRIPT_UNDER_TEST" status --name-only origin)"
-assert_not_contains "$out8" 'remote_only_br' \
+assert_contains "$out8" 'remote_only_br' \
 	&& assert_contains "$out8" 'local_only_br' \
 	&& assert_contains "$out8" 'ahead_br' \
+	&& assert_contains "$out8" 'same_br' \
 	&& end_test_ok
 
 # --- Single-argument mode: tags ---
@@ -134,7 +137,10 @@ assert_contains "$out_remote" 'Behind:' \
 	&& assert_not_contains "$out_remote" 'Ahead:' \
 	&& end_test_ok
 
-begin_test 'status: single-arg --subset behind with @remote accepted'
+begin_test 'status: single-arg @remote behind-only classifies correctly'
+# In behind-only mode (worktree=local, target=@remote), only "behind" (B ancestor
+# of A) is reliably detectable.  ahead_br has worktree ahead of origin, so origin
+# is an ancestor of worktree → classified as behind.
 local out_behind
 out_behind="$(bash "$SCRIPT_UNDER_TEST" status --name-only --subset behind "@${bare_origin}")"
 assert_contains "$out_behind" 'ahead_br' && end_test_ok

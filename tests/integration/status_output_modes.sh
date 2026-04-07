@@ -141,12 +141,15 @@ bash "$SCRIPT_UNDER_TEST" status origin upstream extra &>/dev/null || rc5=$?
 assert_status 1 "$rc5" && end_test_ok
 
 # --- Combined short options ---
-begin_test 'status: -pa expands to -p -a'
-local combo_pa
-combo_pa="$(bash "$SCRIPT_UNDER_TEST" status -pa origin upstream)"
-local sep_pa
-sep_pa="$(bash "$SCRIPT_UNDER_TEST" status -p -a origin upstream)"
-assert_eq "$combo_pa" "$sep_pa" '-pa matches -p -a' && end_test_ok
+begin_test 'status: -pa rejected (--all not supported with --porcelain)'
+local rc_pa=0
+bash "$SCRIPT_UNDER_TEST" status -pa origin upstream &>/dev/null || rc_pa=$?
+assert_status 1 "$rc_pa" && end_test_ok
+
+begin_test 'status: --all --name-only rejected'
+local rc_ano=0
+bash "$SCRIPT_UNDER_TEST" status --all --name-only origin upstream &>/dev/null || rc_ano=$?
+assert_status 1 "$rc_ano" && end_test_ok
 
 begin_test 'status: -ps behind expands to -p -s behind'
 local combo_ps
@@ -165,7 +168,7 @@ assert_eq "$combo_ta" "$sep_ta" '-ta matches -t -a' && end_test_ok
 # --- Porcelain tab-separated format ---
 begin_test 'status -p: tab-separated columns'
 local out8
-out8="$(bash "$SCRIPT_UNDER_TEST" status -p --all origin upstream)"
+out8="$(bash "$SCRIPT_UNDER_TEST" status -p origin upstream)"
 local first_line
 first_line="$(echo "$out8" | head -1)"
 local tab_count

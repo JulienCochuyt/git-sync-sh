@@ -9,39 +9,39 @@ source "$SCRIPT_UNDER_TEST"
 
 run_tests() {
 
-begin_test 'apply_subset_filters: empty subset keeps all arrays'
+begin_test 'apply_subset_filters: empty subset keeps all entries'
 declare -A sf=()
-local -a a=('x') b=('y') d=('z') bh=('w') ah=('v') dv=('u') id=('t')
-apply_subset_filters sf a b d bh ah dv id
-assert_eq 1 "${#a[@]}" && assert_eq 1 "${#b[@]}" && assert_eq 1 "${#d[@]}" \
-	&& assert_eq 1 "${#bh[@]}" && assert_eq 1 "${#ah[@]}" && assert_eq 1 "${#dv[@]}" \
-	&& assert_eq 1 "${#id[@]}" && end_test_ok
+declare -A rbc=([missing]='x' [new]='y' [different]='z' [behind]='w' [ahead]='v' [diverged]='u' [same]='t')
+apply_subset_filters sf rbc
+assert_eq 'x' "${rbc[missing]}" && assert_eq 'y' "${rbc[new]}" && assert_eq 'z' "${rbc[different]}" \
+	&& assert_eq 'w' "${rbc[behind]}" && assert_eq 'v' "${rbc[ahead]}" && assert_eq 'u' "${rbc[diverged]}" \
+	&& assert_eq 't' "${rbc[same]}" && end_test_ok
 
 begin_test 'apply_subset_filters: subset missing keeps only missing'
 declare -A sf2=([missing]=1)
-local -a a2=('x') b2=('y') d2=('z') bh2=('w') ah2=('v') dv2=('u') id2=('t')
-apply_subset_filters sf2 a2 b2 d2 bh2 ah2 dv2 id2
-assert_eq 1 "${#a2[@]}" 'missing kept' \
-	&& assert_eq 0 "${#b2[@]}" 'new cleared' \
-	&& assert_eq 0 "${#d2[@]}" 'different cleared' \
-	&& assert_eq 0 "${#id2[@]}" 'identical cleared' \
+declare -A rbc2=([missing]='x' [new]='y' [different]='z' [behind]='w' [ahead]='v' [diverged]='u' [same]='t')
+apply_subset_filters sf2 rbc2
+assert_eq 'x' "${rbc2[missing]}" 'missing kept' \
+	&& assert_eq '' "${rbc2[new]}" 'new cleared' \
+	&& assert_eq '' "${rbc2[different]}" 'different cleared' \
+	&& assert_eq '' "${rbc2[same]}" 'same cleared' \
 	&& end_test_ok
 
-begin_test 'apply_subset_filters: subset same keeps only identical'
+begin_test 'apply_subset_filters: subset same keeps only same'
 declare -A sf3=([same]=1)
-local -a a3=('x') b3=('y') d3=('z') bh3=() ah3=() dv3=() id3=('t')
-apply_subset_filters sf3 a3 b3 d3 bh3 ah3 dv3 id3
-assert_eq 0 "${#a3[@]}" && assert_eq 0 "${#b3[@]}" && assert_eq 0 "${#d3[@]}" \
-	&& assert_eq 1 "${#id3[@]}" 'identical kept' && end_test_ok
+declare -A rbc3=([missing]='x' [new]='y' [different]='z' [same]='t')
+apply_subset_filters sf3 rbc3
+assert_eq '' "${rbc3[missing]}" && assert_eq '' "${rbc3[new]}" && assert_eq '' "${rbc3[different]}" \
+	&& assert_eq 't' "${rbc3[same]}" 'same kept' && end_test_ok
 
 begin_test 'apply_subset_filters: multiple subsets'
 declare -A sf4=([new]=1 [behind]=1)
-local -a a4=('x') b4=('y') d4=('z') bh4=('w') ah4=('v') dv4=('u') id4=('t')
-apply_subset_filters sf4 a4 b4 d4 bh4 ah4 dv4 id4
-assert_eq 0 "${#a4[@]}" && assert_eq 1 "${#b4[@]}" 'new kept' \
-	&& assert_eq 0 "${#d4[@]}" && assert_eq 1 "${#bh4[@]}" 'behind kept' \
-	&& assert_eq 0 "${#ah4[@]}" && assert_eq 0 "${#dv4[@]}" \
-	&& assert_eq 0 "${#id4[@]}" && end_test_ok
+declare -A rbc4=([missing]='x' [new]='y' [different]='z' [behind]='w' [ahead]='v' [diverged]='u' [same]='t')
+apply_subset_filters sf4 rbc4
+assert_eq '' "${rbc4[missing]}" && assert_eq 'y' "${rbc4[new]}" 'new kept' \
+	&& assert_eq '' "${rbc4[different]}" && assert_eq 'w' "${rbc4[behind]}" 'behind kept' \
+	&& assert_eq '' "${rbc4[ahead]}" && assert_eq '' "${rbc4[diverged]}" \
+	&& assert_eq '' "${rbc4[same]}" && end_test_ok
 
 report_results
 }

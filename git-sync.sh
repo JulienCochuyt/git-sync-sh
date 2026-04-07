@@ -11,13 +11,13 @@ readonly COLOR_CYAN=$'\033[36m'
 readonly COLOR_RESET=$'\033[0m'
 
 # Section color mapping (human-readable mode)
-readonly SECTION_COLOR_ONLY_IN_A="$COLOR_YELLOW"
-readonly SECTION_COLOR_ONLY_IN_B="$COLOR_CYAN"
+readonly SECTION_COLOR_MISSING="$COLOR_YELLOW"
+readonly SECTION_COLOR_NEW="$COLOR_CYAN"
 readonly SECTION_COLOR_DIFFERENT="$COLOR_RED"
 readonly SECTION_COLOR_BEHIND="$COLOR_YELLOW"
 readonly SECTION_COLOR_AHEAD="$COLOR_BLUE"
 readonly SECTION_COLOR_DIVERGED="$COLOR_RED"
-readonly SECTION_COLOR_IDENTICAL="$COLOR_GREEN"
+readonly SECTION_COLOR_SAME="$COLOR_GREEN"
 
 usage_main() {
 	cat <<'EOF'
@@ -54,9 +54,8 @@ Usage:
 Options:
 	-p, --porcelain   Machine-readable output.
 	--name-only       Output only branch/tag names (one per line).
-	-a, --all         Include identical branches/tags details.
-	                  In single-remote mode, also shows branches/tags
-	                  only on the remote.
+	-a, --all         Expand all sections in human-readable output.
+	                  Not supported with --porcelain or --name-only.
 
 	-t, --tags        Compare tags instead of branches.
 	-s, --subset <category[,category...]>
@@ -167,6 +166,24 @@ sort_lines() {
 	printf '%s\n' "$@" | LC_ALL=C sort
 }
 
+# Determine if a category should be shown in detail.
+# Args: $1 = normally_collapsed (0 or 1), $2 = count,
+#       $3 = expand threshold, $4 = collapse threshold, $5 = show_all
+should_show_details() {
+	local normally_collapsed=$1 count=$2 expand=$3 collapse=$4 show_all=$5
+	if ((show_all == 1)); then
+		return 0
+	fi
+	if ((normally_collapsed == 1)); then
+		((count <= expand))
+		return
+	fi
+	if ((collapse > 0 && count >= collapse)); then
+		return 1
+	fi
+	return 0
+}
+
 print_colored_line() {
 	local prefix="$1"
 	local color="$2"
@@ -240,14 +257,16 @@ format_refs_with_counts() {
 # Unavailable fields use "-" as sentinel.
 print_porcelain_refs() {
 	local category="$1"
-	local -n pr_refs="$2"
+	local refs_str="$2"
 	local -n pr_src_map="$3"
 	local -n pr_tgt_map="$4"
 	local -n pr_behind_counts="$5"
 	local -n pr_ahead_counts="$6"
 
-	((${#pr_refs[@]})) || return 0
+	[[ -n "$refs_str" ]] || return 0
 
+	local -a pr_refs=()
+	mapfile -t pr_refs <<< "$refs_str"
 	local -a sorted=()
 	local ref
 	mapfile -t sorted < <(sort_lines "${pr_refs[@]}")
@@ -258,27 +277,7 @@ print_porcelain_refs() {
 	done
 }
 
-status_print_porcelain() {
-	local -n only_in_a_ref="$1"
-	local -n only_in_b_ref="$2"
-	local -n different_ref="$3"
-	local -n behind_ref="$4"
-	local -n ahead_ref="$5"
-	local -n diverged_ref="$6"
-	local -n identical_ref="$7"
-	local -n source_map_ref="$8"
-	local -n target_map_ref="$9"
-	local -n behind_count_ref="${10}"
-	local -n ahead_count_ref="${11}"
 
-	print_porcelain_refs 'missing'   only_in_a_ref  source_map_ref target_map_ref behind_count_ref ahead_count_ref
-	print_porcelain_refs 'new'       only_in_b_ref  source_map_ref target_map_ref behind_count_ref ahead_count_ref
-	print_porcelain_refs 'different' different_ref  source_map_ref target_map_ref behind_count_ref ahead_count_ref
-	print_porcelain_refs 'behind'    behind_ref     source_map_ref target_map_ref behind_count_ref ahead_count_ref
-	print_porcelain_refs 'ahead'     ahead_ref      source_map_ref target_map_ref behind_count_ref ahead_count_ref
-	print_porcelain_refs 'diverged'  diverged_ref   source_map_ref target_map_ref behind_count_ref ahead_count_ref
-	print_porcelain_refs 'same'      identical_ref  source_map_ref target_map_ref behind_count_ref ahead_count_ref
-}
 
 # Classify how target (hash_b) relates to source (hash_a):
 #   behind   = target is ancestor of source (fast-forwardable)
@@ -543,16 +542,15 @@ compute_ref_categories() {
 	local direction_mode="$3"
 	local -n included_patterns_ref="$4"
 	local -n excluded_patterns_ref="$5"
-	local -n only_in_a_ref="$6"
-	local -n only_in_b_ref="$7"
-	local -n different_ref="$8"
-	local -n behind_ref="$9"
-	local -n ahead_ref="${10}"
-	local -n diverged_ref="${11}"
-	local -n identical_ref="${12}"
-	local -n category_map_ref="${13}"
-	local -n behind_count_map_ref="${14}"
-	local -n ahead_count_map_ref="${15}"
+	local -n refs_by_cat_ref="$6"
+	local -n behind_count_map_ref="$7"
+	local -n ahead_count_map_ref="$8"
+
+	# Initialize all category keys to empty.
+	local _cat
+	for _cat in missing new different behind ahead diverged same; do
+		refs_by_cat_ref[$_cat]=''
+	done
 
 	local ref
 	for ref in "${!source_map_ref[@]}"; do
@@ -565,14 +563,12 @@ compute_ref_categories() {
 		fi
 
 		if [[ -z "${target_map_ref[$ref]+x}" ]]; then
-			only_in_a_ref+=("$ref")
-			category_map_ref["$ref"]='missing'
+			refs_by_cat_ref[missing]+="$ref"$'\n'
 		elif [[ "${source_map_ref[$ref]}" == "${target_map_ref[$ref]}" ]]; then
-			identical_ref+=("$ref")
+			refs_by_cat_ref[same]+="$ref"$'\n'
 		else
 			if [[ "$direction_mode" == 'none' ]]; then
-				different_ref+=("$ref")
-				category_map_ref["$ref"]='different'
+				refs_by_cat_ref[different]+="$ref"$'\n'
 			else
 				local _dir _left _right
 				_dir="$(classify_direction_relation "${source_map_ref[$ref]}" "${target_map_ref[$ref]}" "$direction_mode")"
@@ -583,20 +579,16 @@ compute_ref_categories() {
 						ahead_count_map_ref["$ref"]="$_right"
 						;;&
 					behind)
-						behind_ref+=("$ref")
-						category_map_ref["$ref"]='behind'
+						refs_by_cat_ref[behind]+="$ref"$'\n'
 						;;
 					ahead)
-						ahead_ref+=("$ref")
-						category_map_ref["$ref"]='ahead'
+						refs_by_cat_ref[ahead]+="$ref"$'\n'
 						;;
 					different)
-						different_ref+=("$ref")
-						category_map_ref["$ref"]='different'
+						refs_by_cat_ref[different]+="$ref"$'\n'
 						;;
 					*)
-						diverged_ref+=("$ref")
-						category_map_ref["$ref"]='diverged'
+						refs_by_cat_ref[diverged]+="$ref"$'\n'
 						;;
 				esac
 			fi
@@ -613,33 +605,28 @@ compute_ref_categories() {
 		fi
 
 		if [[ -z "${source_map_ref[$ref]+x}" ]]; then
-			only_in_b_ref+=("$ref")
-			category_map_ref["$ref"]='new'
+			refs_by_cat_ref[new]+="$ref"$'\n'
 		fi
+	done
+
+	# Strip trailing newlines.
+	for _cat in missing new different behind ahead diverged same; do
+		refs_by_cat_ref[$_cat]="${refs_by_cat_ref[$_cat]%$'\n'}"
 	done
 }
 
 apply_subset_filters() {
 	local -n subset_filters_ref="$1"
-	local -n only_in_a_ref="$2"
-	local -n only_in_b_ref="$3"
-	local -n different_ref="$4"
-	local -n behind_ref="$5"
-	local -n ahead_ref="$6"
-	local -n diverged_ref="$7"
-	local -n identical_ref="$8"
+	local -n refs_by_cat_ref="$2"
 
 	if ((${#subset_filters_ref[@]} == 0)); then
 		return
 	fi
 
-	[[ -n "${subset_filters_ref[missing]+x}" ]] || only_in_a_ref=()
-	[[ -n "${subset_filters_ref[new]+x}" ]] || only_in_b_ref=()
-	[[ -n "${subset_filters_ref[different]+x}" ]] || different_ref=()
-	[[ -n "${subset_filters_ref[behind]+x}" ]] || behind_ref=()
-	[[ -n "${subset_filters_ref[ahead]+x}" ]] || ahead_ref=()
-	[[ -n "${subset_filters_ref[diverged]+x}" ]] || diverged_ref=()
-	[[ -n "${subset_filters_ref[same]+x}" ]] || identical_ref=()
+	local _cat
+	for _cat in missing new different behind ahead diverged same; do
+		[[ -n "${subset_filters_ref[$_cat]+x}" ]] || refs_by_cat_ref[$_cat]=''
+	done
 }
 
 normalize_subset_category() {
@@ -749,13 +736,12 @@ resolve_subset_filters() {
 }
 
 status_print_name_only() {
-	local -n refs="$1"
+	local refs_str="$1"
+	[[ -n "$refs_str" ]] || return 0
+
+	local -a refs=()
+	mapfile -t refs <<< "$refs_str"
 	local -a sorted=()
-
-	if ((${#refs[@]} == 0)); then
-		return
-	fi
-
 	mapfile -t sorted < <(sort_lines "${refs[@]}")
 	printf '%s\n' "${sorted[@]}"
 }
@@ -795,9 +781,9 @@ status_command() {
 				name_only=1
 				shift
 				;;
-			-s)
+			-s|--subset)
 				if (($# < 2)); then
-					printf 'Option -s requires a value.\n\n' >&2
+					printf 'Option %s requires a value.\n\n' "$1" >&2
 					usage_hint_status
 					exit 1
 				fi
@@ -808,23 +794,14 @@ status_command() {
 				add_subset_categories_or_exit "${1#--subset=}" subset_plain subset_add subset_remove hint_status
 				shift
 				;;
-			--subset)
-				if (($# < 2)); then
-					printf 'Option --subset requires a value.\n\n' >&2
-					usage_hint_status
-					exit 1
-				fi
-				add_subset_categories_or_exit "$2" subset_plain subset_add subset_remove hint_status
-				shift 2
-				;;
 			-a|--all)
 				show_all=1
 				shift
 				;;
 
-			-i)
+			-i|--include)
 				if (($# < 2)); then
-					printf 'Option -i requires a value.\n\n' >&2
+					printf 'Option %s requires a value.\n\n' "$1" >&2
 					usage_hint_status
 					exit 1
 				fi
@@ -834,15 +811,6 @@ status_command() {
 			--include=*)
 				included_patterns+=("${1#--include=}")
 				shift
-				;;
-			--include)
-				if (($# < 2)); then
-					printf 'Option --include requires a value.\n\n' >&2
-					usage_hint_status
-					exit 1
-				fi
-				included_patterns+=("$2")
-				shift 2
 				;;
 			-I|--include-from)
 				if (($# < 2)); then
@@ -857,9 +825,9 @@ status_command() {
 				load_pattern_file "${1#--include-from=}" included_patterns hint_status
 				shift
 				;;
-			-x)
+			-x|--exclude)
 				if (($# < 2)); then
-					printf 'Option -x requires a value.\n\n' >&2
+					printf 'Option %s requires a value.\n\n' "$1" >&2
 					usage_hint_status
 					exit 1
 				fi
@@ -870,19 +838,6 @@ status_command() {
 				excluded_patterns+=("${1#--exclude=}")
 				shift
 				;;
-			--exclude)
-				if (($# < 2)); then
-					printf 'Option --exclude requires a value.\n\n' >&2
-					usage_hint_status
-					exit 1
-				fi
-				excluded_patterns+=("$2")
-				shift 2
-				;;
-			--exclude-from=*)
-				load_pattern_file "${1#--exclude-from=}" excluded_patterns hint_status
-				shift
-				;;
 			-X|--exclude-from)
 				if (($# < 2)); then
 					printf 'Option %s requires a file path.\n\n' "$1" >&2
@@ -891,6 +846,10 @@ status_command() {
 				fi
 				load_pattern_file "$2" excluded_patterns hint_status
 				shift 2
+				;;
+			--exclude-from=*)
+				load_pattern_file "${1#--exclude-from=}" excluded_patterns hint_status
+				shift
 				;;
 			--)
 				shift
@@ -919,6 +878,12 @@ status_command() {
 
 	if ((name_only == 1)) && ((porcelain == 1)); then
 		printf 'Options --name-only and --porcelain are mutually exclusive.\n\n' >&2
+		usage_hint_status
+		exit 1
+	fi
+
+	if ((show_all == 1)) && { ((porcelain == 1)) || ((name_only == 1)); }; then
+		printf 'Option --all is not supported with --porcelain or --name-only.\n\n' >&2
 		usage_hint_status
 		exit 1
 	fi
@@ -1057,167 +1022,93 @@ status_command() {
 	load_ref_set "$remote_a_source" "$remote_a_name" "$tags_mode" ref_map_a
 	load_ref_set "$remote_b_source" "$remote_b_name" "$tags_mode" ref_map_b
 
-	local -a only_in_a=()
-	local -a only_in_b=()
-	local -a different=()
-	local -a behind=()
-	local -a ahead=()
-	local -a diverged=()
-	local -a identical=()
-	local -A category_by_ref=()
+	declare -A refs_by_cat=()
 	local -A behind_counts=()
 	local -A ahead_counts=()
-	local -a sorted_only_in_a=()
-	local -a sorted_only_in_b=()
-	local -a sorted_different=()
-	local -a sorted_behind=()
-	local -a sorted_ahead=()
-	local -a sorted_diverged=()
-	local -a sorted_identical=()
 
-	compute_ref_categories ref_map_a ref_map_b "$direction_mode" included_patterns excluded_patterns only_in_a only_in_b different behind ahead diverged identical category_by_ref behind_counts ahead_counts
-	apply_subset_filters subset_filters only_in_a only_in_b different behind ahead diverged identical
+	compute_ref_categories ref_map_a ref_map_b "$direction_mode" included_patterns excluded_patterns refs_by_cat behind_counts ahead_counts
+	apply_subset_filters subset_filters refs_by_cat
 
-	local show_new_details=1
-	if [[ "$remote_a_source" == 'worktree' ]] && ((show_all == 0)) && [[ -z "${subset_filters[new]+x}" ]]; then
-		show_new_details=0
-	fi
+	local -a categories=(missing new different behind ahead diverged same)
+	local cat
 
 	if ((name_only == 1)); then
-		if ((show_new_details == 1)); then
-			status_print_name_only only_in_b
-		fi
-		status_print_name_only only_in_a
-		status_print_name_only different
-		status_print_name_only behind
-		status_print_name_only ahead
-		status_print_name_only diverged
-
-		if ((show_all == 1)) || [[ -n "${subset_filters[same]+x}" ]]; then
-			status_print_name_only identical
-		fi
+		for cat in "${categories[@]}"; do
+			status_print_name_only "${refs_by_cat[$cat]}"
+		done
 		return
 	fi
 
 	if ((porcelain == 1)); then
-		local show_identical=0
-		if ((show_all == 1)) || [[ -n "${subset_filters[same]+x}" ]]; then
-			show_identical=1
-		fi
-
-		if ((show_identical == 1)); then
-			status_print_porcelain only_in_a only_in_b different behind ahead diverged identical ref_map_a ref_map_b behind_counts ahead_counts
-		else
-			local -a empty_identical=()
-			status_print_porcelain only_in_a only_in_b different behind ahead diverged empty_identical ref_map_a ref_map_b behind_counts ahead_counts
-		fi
+		for cat in "${categories[@]}"; do
+			print_porcelain_refs "$cat" "${refs_by_cat[$cat]}" ref_map_a ref_map_b behind_counts ahead_counts
+		done
 		return
 	fi
 
-	if ((${#only_in_a[@]} > 0)); then
-		mapfile -t sorted_only_in_a < <(sort_lines "${only_in_a[@]}")
-	fi
-
-	if ((${#only_in_b[@]} > 0)); then
-		mapfile -t sorted_only_in_b < <(sort_lines "${only_in_b[@]}")
-	fi
-
-	if ((${#different[@]} > 0)); then
-		mapfile -t sorted_different < <(sort_lines "${different[@]}")
-	fi
-
-	if ((${#behind[@]} > 0)); then
-		mapfile -t sorted_behind < <(sort_lines "${behind[@]}")
-	fi
-
-	if ((${#ahead[@]} > 0)); then
-		mapfile -t sorted_ahead < <(sort_lines "${ahead[@]}")
-	fi
-
-	if ((${#diverged[@]} > 0)); then
-		mapfile -t sorted_diverged < <(sort_lines "${diverged[@]}")
-	fi
-
-	if ((${#identical[@]} > 0)); then
-		mapfile -t sorted_identical < <(sort_lines "${identical[@]}")
-	fi
-
+	local expand_threshold=5
+	local collapse_threshold=50
 	local printed_sections=0
 
-	if ((${#sorted_only_in_a[@]} > 0)); then
-		print_section "Missing: only in ${remote_a_ref}" "$SECTION_COLOR_ONLY_IN_A" "${sorted_only_in_a[@]}"
-		printed_sections=1
-	fi
+	for cat in "${categories[@]}"; do
+		[[ -n "${refs_by_cat[$cat]}" ]] || continue
+		local -a _refs=()
+		mapfile -t _refs <<< "${refs_by_cat[$cat]}"
+		local _count=${#_refs[@]}
 
-	if ((${#sorted_only_in_b[@]} > 0)) || ((${#only_in_b[@]} > 0 && show_new_details == 0)); then
-		if ((printed_sections == 1)); then
-			printf '\n'
-		fi
-		if ((show_new_details == 1)); then
-			print_section "New: only in ${remote_b_ref}" "$SECTION_COLOR_ONLY_IN_B" "${sorted_only_in_b[@]}"
+		# Determine collapse state.
+		local _normally_collapsed=0
+		case "$cat" in
+			new)
+				if [[ "$remote_a_source" == 'worktree' ]] \
+						&& [[ -z "${subset_filters[new]+x}" ]]; then
+					_normally_collapsed=1
+				fi
+				;;
+			same)
+				if [[ -z "${subset_filters[same]+x}" ]]; then
+					_normally_collapsed=1
+				fi
+				;;
+		esac
+
+		# Title and color.
+		local _title _color
+		case "$cat" in
+			missing)   _title="Missing: only in ${remote_a_ref}";                      _color="$SECTION_COLOR_MISSING" ;;
+			new)       _title="New: only in ${remote_b_ref}";                           _color="$SECTION_COLOR_NEW" ;;
+			different) _title="Different: between ${remote_a_ref} and ${remote_b_ref}"; _color="$SECTION_COLOR_DIFFERENT" ;;
+			behind)    _title="Behind: ${remote_b_ref} behind ${remote_a_ref}";         _color="$SECTION_COLOR_BEHIND" ;;
+			ahead)     _title="Ahead: ${remote_b_ref} ahead of ${remote_a_ref}";        _color="$SECTION_COLOR_AHEAD" ;;
+			diverged)  _title="Diverged: between ${remote_a_ref} and ${remote_b_ref}";  _color="$SECTION_COLOR_DIVERGED" ;;
+			same)      _title="Same: identical in ${remote_a_ref} and ${remote_b_ref}"; _color="$SECTION_COLOR_SAME" ;;
+		esac
+
+		((printed_sections == 0)) || printf '\n'
+
+		if should_show_details "$_normally_collapsed" "$_count" \
+				"$expand_threshold" "$collapse_threshold" "$show_all"; then
+			# Sort and optionally decorate only when showing detail.
+			local -a _sorted=()
+			mapfile -t _sorted < <(sort_lines "${_refs[@]}")
+
+			case "$cat" in
+				behind|ahead|diverged)
+					local -a _decorated=()
+					mapfile -t _decorated < <(format_refs_with_counts "$cat" behind_counts ahead_counts "${_sorted[@]}")
+					print_section "$_title" "$_color" "${_decorated[@]}"
+					;;
+				*)
+					print_section "$_title" "$_color" "${_sorted[@]}"
+					;;
+			esac
 		else
-			printf 'New: only in %s (%d)\n' "$remote_b_ref" "${#only_in_b[@]}"
-			printf '  (Use --all or --subset=new for detailed list.)\n'
+			printf '%s (%d)\n' "$_title" "$_count"
+			printf '  (Use --all or --subset=%s for detailed list.)\n' "$cat"
 		fi
-		printed_sections=1
-	fi
 
-	if ((${#sorted_different[@]} > 0)); then
-		if ((printed_sections == 1)); then
-			printf '\n'
-		fi
-		print_section "Different: between ${remote_a_ref} and ${remote_b_ref}" "$SECTION_COLOR_DIFFERENT" "${sorted_different[@]}"
 		printed_sections=1
-	fi
-
-	if ((${#sorted_behind[@]} > 0)); then
-		if ((printed_sections == 1)); then
-			printf '\n'
-		fi
-		local -a decorated_behind=()
-		mapfile -t decorated_behind < <(format_refs_with_counts behind behind_counts ahead_counts "${sorted_behind[@]}")
-		print_section "Behind: ${remote_b_ref} behind ${remote_a_ref}" "$SECTION_COLOR_BEHIND" "${decorated_behind[@]}"
-		printed_sections=1
-	fi
-
-	if ((${#sorted_ahead[@]} > 0)); then
-		if ((printed_sections == 1)); then
-			printf '\n'
-		fi
-		local -a decorated_ahead=()
-		mapfile -t decorated_ahead < <(format_refs_with_counts ahead behind_counts ahead_counts "${sorted_ahead[@]}")
-		print_section "Ahead: ${remote_b_ref} ahead of ${remote_a_ref}" "$SECTION_COLOR_AHEAD" "${decorated_ahead[@]}"
-		printed_sections=1
-	fi
-
-	if ((${#sorted_diverged[@]} > 0)); then
-		if ((printed_sections == 1)); then
-			printf '\n'
-		fi
-		local -a decorated_diverged=()
-		mapfile -t decorated_diverged < <(format_refs_with_counts diverged behind_counts ahead_counts "${sorted_diverged[@]}")
-		print_section "Diverged: between ${remote_a_ref} and ${remote_b_ref}" "$SECTION_COLOR_DIVERGED" "${decorated_diverged[@]}"
-		printed_sections=1
-	fi
-
-	if ((show_all == 1)) || [[ -n "${subset_filters[same]+x}" ]]; then
-		if ((${#sorted_identical[@]} > 0)); then
-			if ((printed_sections == 1)); then
-				printf '\n'
-			fi
-			print_section "Same: identical in ${remote_a_ref} and ${remote_b_ref}" "$SECTION_COLOR_IDENTICAL" "${sorted_identical[@]}"
-			printed_sections=1
-		fi
-	else
-		if ((${#identical[@]} > 0)); then
-			if ((printed_sections == 1)); then
-				printf '\n'
-			fi
-			printf 'Same: identical in %s and %s (%d)\n' "$remote_a_ref" "$remote_b_ref" "${#identical[@]}"
-			printf '  (Use --all or --subset=same for detailed list.)\n'
-			printed_sections=1
-		fi
-	fi
+	done
 
 	if ((printed_sections == 0)); then
 		if ((tags_mode == 1)); then
@@ -1324,10 +1215,6 @@ align_command() {
 				yes_mode=1
 				shift
 				;;
-			--on-failure=*)
-				on_failure="${1#--on-failure=}"
-				shift
-				;;
 			--on-failure)
 				if (($# < 2)); then
 					printf 'Option --on-failure requires a value.\n\n' >&2
@@ -1336,6 +1223,10 @@ align_command() {
 				fi
 				on_failure="$2"
 				shift 2
+				;;
+			--on-failure=*)
+				on_failure="${1#--on-failure=}"
+				shift
 				;;
 			-f|--force)
 				if [[ "$force_mode" == 'lease' ]]; then
@@ -1355,9 +1246,9 @@ align_command() {
 				force_mode='lease'
 				shift
 				;;
-			-s)
+			-s|--subset)
 				if (($# < 2)); then
-					printf 'Option -s requires a value.\n\n' >&2
+					printf 'Option %s requires a value.\n\n' "$1" >&2
 					usage_hint_align
 					exit 1
 				fi
@@ -1368,18 +1259,9 @@ align_command() {
 				add_subset_categories_or_exit "${1#--subset=}" subset_plain subset_add subset_remove hint_align
 				shift
 				;;
-			--subset)
+			-i|--include)
 				if (($# < 2)); then
-					printf 'Option --subset requires a value.\n\n' >&2
-					usage_hint_align
-					exit 1
-				fi
-				add_subset_categories_or_exit "$2" subset_plain subset_add subset_remove hint_align
-				shift 2
-				;;
-			-i)
-				if (($# < 2)); then
-					printf 'Option -i requires a value.\n\n' >&2
+					printf 'Option %s requires a value.\n\n' "$1" >&2
 					usage_hint_align
 					exit 1
 				fi
@@ -1389,15 +1271,6 @@ align_command() {
 			--include=*)
 				included_patterns+=("${1#--include=}")
 				shift
-				;;
-			--include)
-				if (($# < 2)); then
-					printf 'Option --include requires a value.\n\n' >&2
-					usage_hint_align
-					exit 1
-				fi
-				included_patterns+=("$2")
-				shift 2
 				;;
 			-I|--include-from)
 				if (($# < 2)); then
@@ -1412,9 +1285,9 @@ align_command() {
 				load_pattern_file "${1#--include-from=}" included_patterns hint_align
 				shift
 				;;
-			-x)
+			-x|--exclude)
 				if (($# < 2)); then
-					printf 'Option -x requires a value.\n\n' >&2
+					printf 'Option %s requires a value.\n\n' "$1" >&2
 					usage_hint_align
 					exit 1
 				fi
@@ -1424,15 +1297,6 @@ align_command() {
 			--exclude=*)
 				excluded_patterns+=("${1#--exclude=}")
 				shift
-				;;
-			--exclude)
-				if (($# < 2)); then
-					printf 'Option --exclude requires a value.\n\n' >&2
-					usage_hint_align
-					exit 1
-				fi
-				excluded_patterns+=("$2")
-				shift 2
 				;;
 			-X|--exclude-from)
 				if (($# < 2)); then
@@ -1550,32 +1414,31 @@ align_command() {
 	load_ref_set "$source_mode" "$source_name" "$tags_mode" ref_map_a
 	load_ref_set "$target_mode" "$target_name" "$tags_mode" ref_map_b
 
-	local -a only_in_a=()
-	local -a only_in_b=()
-	local -a different=()
-	local -a behind=()
-	local -a ahead=()
-	local -a diverged=()
-	local -a identical=()
-	declare -A category_by_ref=()
+	declare -A refs_by_cat=()
 	declare -A behind_counts=()
 	declare -A ahead_counts=()
 
-	compute_ref_categories ref_map_a ref_map_b "$direction_mode" included_patterns excluded_patterns only_in_a only_in_b different behind ahead diverged identical category_by_ref behind_counts ahead_counts
-	apply_subset_filters subset_filters only_in_a only_in_b different behind ahead diverged identical
+	compute_ref_categories ref_map_a ref_map_b "$direction_mode" included_patterns excluded_patterns refs_by_cat behind_counts ahead_counts
+	apply_subset_filters subset_filters refs_by_cat
 
 	# Exclude new (deletions) by default unless --all or --subset new.
 	if ((show_all == 0)) && [[ -z "${subset_filters[new]+x}" ]]; then
-		only_in_b=()
+		refs_by_cat[new]=''
 	fi
 
+	# Build candidates list and reverse lookup from refs_by_cat.
+	declare -A category_by_ref=()
 	local -a candidates=()
-	candidates+=("${only_in_a[@]}")
-	candidates+=("${only_in_b[@]}")
-	candidates+=("${different[@]}")
-	candidates+=("${behind[@]}")
-	candidates+=("${ahead[@]}")
-	candidates+=("${diverged[@]}")
+	local _cat _ref
+	for _cat in missing new different behind ahead diverged; do
+		[[ -n "${refs_by_cat[$_cat]}" ]] || continue
+		local -a _cat_refs=()
+		mapfile -t _cat_refs <<< "${refs_by_cat[$_cat]}"
+		for _ref in "${_cat_refs[@]}"; do
+			candidates+=("$_ref")
+			category_by_ref["$_ref"]="$_cat"
+		done
+	done
 
 	if ((${#candidates[@]} > 0)); then
 		mapfile -t candidates < <(sort_lines "${candidates[@]}")

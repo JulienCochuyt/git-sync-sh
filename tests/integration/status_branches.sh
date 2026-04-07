@@ -72,12 +72,17 @@ local out3
 out3="$(bash "$SCRIPT_UNDER_TEST" status origin upstream)"
 assert_contains "$out3" 'Ahead: upstream ahead of origin' && end_test_ok
 
-begin_test 'status: identical branches hidden by default'
+begin_test 'status: identical branches expanded by default when few'
 local out4
 out4="$(bash "$SCRIPT_UNDER_TEST" status origin upstream)"
-assert_contains "$out4" '(Use --all or --subset=same for detailed list.)' && end_test_ok
+assert_contains "$out4" 'Same: identical in origin and upstream' \
+	&& assert_contains "$out4" 'main' \
+	&& assert_contains "$out4" 'shared' \
+	&& end_test_ok
 
 begin_test 'status: --all shows identical branches'
+# Note: with only 2 same branches, threshold expansion (test above) produces
+# the same result.  --all is tested distinctly because it bypasses thresholds.
 local out5
 out5="$(bash "$SCRIPT_UNDER_TEST" status --all origin upstream)"
 assert_contains "$out5" 'Same: identical in origin and upstream' \
@@ -87,7 +92,7 @@ assert_contains "$out5" 'Same: identical in origin and upstream' \
 
 begin_test 'status: porcelain output contains all categories'
 local out6
-out6="$(bash "$SCRIPT_UNDER_TEST" status -p --all origin upstream)"
+out6="$(bash "$SCRIPT_UNDER_TEST" status -p origin upstream)"
 assert_contains "$out6" 'missing' \
 	&& assert_contains "$out6" 'new' \
 	&& assert_contains "$out6" 'ahead' \
@@ -100,6 +105,8 @@ out7="$(bash "$SCRIPT_UNDER_TEST" status --name-only origin upstream)"
 assert_contains "$out7" 'only_origin' \
 	&& assert_contains "$out7" 'only_upstream' \
 	&& assert_contains "$out7" 'diff_branch' \
+	&& assert_contains "$out7" 'main' \
+	&& assert_contains "$out7" 'shared' \
 	&& assert_not_contains "$out7" 'Missing:' \
 	&& end_test_ok
 
@@ -161,13 +168,14 @@ assert_contains "$out_all_same" 'Same:' \
 	&& assert_not_contains "$out_all_same" 'No branches to report' \
 	&& end_test_ok
 
-begin_test 'status: --subset +same adds same to defaults'
+begin_test 'status: --subset +same adds same to human output'
 local out15
-out15="$(bash "$SCRIPT_UNDER_TEST" status --name-only --subset +same origin upstream)"
-assert_contains "$out15" 'main' \
+out15="$(bash "$SCRIPT_UNDER_TEST" status --subset +same origin upstream)"
+assert_contains "$out15" 'Same: identical in origin and upstream' \
+	&& assert_contains "$out15" 'main' \
 	&& assert_contains "$out15" 'shared' \
 	&& assert_contains "$out15" 'only_origin' \
-	&& assert_contains "$out15" 'diff_branch' \
+	&& assert_not_contains "$out15" 'Use --all' \
 	&& end_test_ok
 
 begin_test 'status: --subset -new removes new from output'
