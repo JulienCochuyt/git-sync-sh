@@ -29,6 +29,21 @@ Commands:
 	align    Push branches or tags from source to target.
 	help     Show this help.
 
+Configuration:
+	Defaults can be set via git config. Example:
+
+	    git config sync.include 'release/*'
+	    git config --add sync.include 'main'
+	    git config sync.exclude 'dependabot/*'
+	    git config sync.align.on-failure abort
+	    git config sync.status.expand 5
+	    git config sync.status.collapse 100
+
+	Patterns are resolved in layers: shared config, per-command config,
+	then CLI. For includes, CLI replaces config unless -i + is passed
+	to merge. For excludes, CLI merges with config unless -x - is
+	passed to replace.
+
 For command-specific help:
 	git sync status --help
 	git sync align --help
@@ -75,11 +90,16 @@ Options:
 	                  new, missing, and same are always available.
 
 	-i, --include <pattern>
-	                  Include branches/tags matching a shell glob pattern. Repeatable.
+	                  Include branches/tags matching a shell glob pattern.
+	                  Replaces config includes. Use -i + to merge with them.
+	                  Repeatable.
 	-I, --include-from <file>
 	                  Include glob patterns listed in <file> (one per line).
 	-x, --exclude <pattern>
-	                  Exclude branches/tags matching a shell glob pattern. Repeatable.
+	                  Exclude branches/tags matching a shell glob pattern.
+	                  Merges with config excludes. Use -x - to replace them.
+	                  Use -x + to re-assert all excludes after includes.
+	                  Repeatable.
 	-X, --exclude-from <file>
 	                  Exclude glob patterns listed in <file> (one per line).
 
@@ -127,11 +147,16 @@ Options:
 	                    Tags only:          different.
 
 	-i, --include <pattern>
-	                    Include branches/tags matching a shell glob pattern. Repeatable.
+	                    Include branches/tags matching a shell glob pattern.
+	                    Replaces config includes. Use -i + to merge with them.
+	                    Repeatable.
 	-I, --include-from <file>
 	                    Include glob patterns listed in <file> (one per line).
 	-x, --exclude <pattern>
-	                    Exclude branches/tags matching a shell glob pattern. Repeatable.
+	                    Exclude branches/tags matching a shell glob pattern.
+	                    Merges with config excludes. Use -x - to replace them.
+	                    Use -x + to re-assert all excludes after includes.
+	                    Repeatable.
 	-X, --exclude-from <file>
 	                    Exclude glob patterns listed in <file> (one per line).
 
@@ -481,36 +506,160 @@ load_pattern_file() {
 	done < <(tr '\r' '\n' < "$file_path" | cat -s)
 }
 
-ref_is_included() {
-	local ref="$1"
-	local -n patterns_ref="$2"
-
-	if ((${#patterns_ref[@]} == 0)); then
+# Load a multi-value git config key into an array.
+# Returns 0 if any values found, 1 if key is unset.
+load_config_multi() {
+	local key="$1"
+	local -n _cm_ref="$2"
+	local -a _cm_vals=()
+	if mapfile -t _cm_vals < <(git config --get-all "$key" 2>/dev/null) \
+			&& (("${#_cm_vals[@]}" > 0)) && [[ -n "${_cm_vals[0]}" ]]; then
+		_cm_ref+=("${_cm_vals[@]}")
 		return 0
 	fi
-
-	local pattern
-	for pattern in "${patterns_ref[@]}"; do
-		if [[ "$ref" == $pattern ]]; then
-			return 0
-		fi
-	done
-
 	return 1
 }
 
-ref_is_excluded() {
-	local ref="$1"
-	local -n patterns_ref="$2"
+# Load a single-value git config key.
+# Returns 0 if found, 1 if unset. Value printed to stdout.
+load_config_scalar() {
+	git config --get "$1" 2>/dev/null
+}
 
-	local pattern
-	for pattern in "${patterns_ref[@]}"; do
-		if [[ "$ref" == $pattern ]]; then
-			return 0
+# Load a multi-value git config key into a newline-delimited string
+# at a specific index of an indexed array.
+load_config_multi_joined() {
+	local key="$1"
+	local -n _cmj_ref="$2"
+	local idx="$3"
+	local -a _cmj_vals=()
+	if load_config_multi "$key" _cmj_vals; then
+		_cmj_ref[$idx]="$(printf '%s\n' "${_cmj_vals[@]}")"
+		return 0
+	fi
+	return 1
+}
+
+# Pass 1: resolve layered include/exclude modifiers in place.
+# Takes three indexed array namerefs (each with 3 entries, index = layer):
+#   $1 = inc_layers  — newline-delimited include patterns per layer
+#   $2 = exc_layers  — newline-delimited exclude patterns per layer
+#   $3 = re_exclude  — output: 0 or 1 per layer (re-exclusion flag)
+# Strips +/- modifier tokens. Clears earlier layers per merge/replace
+# semantics. Sets re_exclude[i]=1 when "+" appears in exc_layers[i].
+resolve_patterns() {
+	local -n _rp_inc="$1"
+	local -n _rp_exc="$2"
+	local -n _rp_re="$3"
+
+	local i j
+	for i in 0 1 2; do
+		# --- Includes ---
+		if [[ -n "${_rp_inc[$i]}" ]]; then
+			local _has_merge=0
+			local _new_inc=''
+			local _pat
+			while IFS= read -r _pat; do
+				[[ -z "$_pat" ]] && continue
+				if [[ "$_pat" == '+' ]]; then
+					_has_merge=1
+				else
+					_new_inc+="$_pat"$'\n'
+				fi
+			done <<< "${_rp_inc[$i]}"
+			_new_inc="${_new_inc%$'\n'}"
+			if ((!_has_merge)); then
+				for ((j = 0; j < i; j++)); do
+					_rp_inc[$j]=''
+				done
+			fi
+			_rp_inc[$i]="$_new_inc"
+		fi
+
+		# --- Excludes ---
+		if [[ -n "${_rp_exc[$i]}" ]]; then
+			local _has_replace=0
+			local _has_reassert=0
+			local _new_exc=''
+			local _pat
+			while IFS= read -r _pat; do
+				[[ -z "$_pat" ]] && continue
+				if [[ "$_pat" == '-' ]]; then
+					_has_replace=1
+				elif [[ "$_pat" == '+' ]]; then
+					_has_reassert=1
+				else
+					_new_exc+="$_pat"$'\n'
+				fi
+			done <<< "${_rp_exc[$i]}"
+			_new_exc="${_new_exc%$'\n'}"
+			if ((_has_replace)); then
+				for ((j = 0; j < i; j++)); do
+					_rp_exc[$j]=''
+				done
+			fi
+			_rp_re[$i]="$_has_reassert"
+			_rp_exc[$i]="$_new_exc"
 		fi
 	done
+}
 
-	return 1
+# Pass 2 per-ref: is this ref accepted by the resolved layers?
+# Returns 0 (accepted) or 1 (rejected).
+ref_is_accepted() {
+	local ref="$1"
+	local -n _ra_inc="$2"
+	local -n _ra_exc="$3"
+	local -n _ra_re="$4"
+
+	# has_any_include: true if any layer has non-empty includes
+	local has_inc=0
+	local i
+	for i in 0 1 2; do
+		if [[ -n "${_ra_inc[$i]}" ]]; then has_inc=1; break; fi
+	done
+
+	local accepted=$((1 - has_inc))   # all refs if no includes, else empty
+
+	for i in 0 1 2; do
+		# Step 1: this layer's excludes remove from accepted
+		if ((accepted)) && [[ -n "${_ra_exc[$i]}" ]]; then
+			local _pat
+			while IFS= read -r _pat; do
+				[[ -n "$_pat" ]] && [[ "$ref" == $_pat ]] && { accepted=0; break; }
+			done <<< "${_ra_exc[$i]}"
+		fi
+
+		# Steps 2-3: layer includes (pick from full set, minus own excludes)
+		local layer_match=0
+		if [[ -n "${_ra_inc[$i]}" ]]; then
+			local _pat
+			while IFS= read -r _pat; do
+				[[ -n "$_pat" ]] && [[ "$ref" == $_pat ]] && { layer_match=1; break; }
+			done <<< "${_ra_inc[$i]}"
+			if ((layer_match)) && [[ -n "${_ra_exc[$i]}" ]]; then
+				while IFS= read -r _pat; do
+					[[ -n "$_pat" ]] && [[ "$ref" == $_pat ]] && { layer_match=0; break; }
+				done <<< "${_ra_exc[$i]}"
+			fi
+		fi
+
+		# Step 4: re-exclusion — check all previous layers' excludes
+		if ((layer_match && _ra_re[i])); then
+			local j
+			for ((j = 0; j < i; j++)); do
+				[[ -z "${_ra_exc[$j]}" ]] && continue
+				while IFS= read -r _pat; do
+					[[ -n "$_pat" ]] && [[ "$ref" == $_pat ]] && { layer_match=0; break 2; }
+				done <<< "${_ra_exc[$j]}"
+			done
+		fi
+
+		# Step 5: layer match adds to accepted
+		((layer_match)) && accepted=1
+	done
+
+	return $((1 - accepted))
 }
 
 load_ref_set() {
@@ -540,11 +689,12 @@ compute_ref_categories() {
 	local -n source_map_ref="$1"
 	local -n target_map_ref="$2"
 	local direction_mode="$3"
-	local -n included_patterns_ref="$4"
-	local -n excluded_patterns_ref="$5"
-	local -n refs_by_cat_ref="$6"
-	local -n behind_count_map_ref="$7"
-	local -n ahead_count_map_ref="$8"
+	local -n inc_layers_ref="$4"
+	local -n exc_layers_ref="$5"
+	local -n re_exclude_ref="$6"
+	local -n refs_by_cat_ref="$7"
+	local -n behind_count_map_ref="$8"
+	local -n ahead_count_map_ref="$9"
 
 	# Initialize all category keys to empty.
 	local _cat
@@ -554,11 +704,7 @@ compute_ref_categories() {
 
 	local ref
 	for ref in "${!source_map_ref[@]}"; do
-		if ! ref_is_included "$ref" included_patterns_ref; then
-			continue
-		fi
-
-		if ref_is_excluded "$ref" excluded_patterns_ref; then
+		if ! ref_is_accepted "$ref" inc_layers_ref exc_layers_ref re_exclude_ref; then
 			continue
 		fi
 
@@ -596,11 +742,7 @@ compute_ref_categories() {
 	done
 
 	for ref in "${!target_map_ref[@]}"; do
-		if ! ref_is_included "$ref" included_patterns_ref; then
-			continue
-		fi
-
-		if ref_is_excluded "$ref" excluded_patterns_ref; then
+		if ! ref_is_accepted "$ref" inc_layers_ref exc_layers_ref re_exclude_ref; then
 			continue
 		fi
 
@@ -1017,6 +1159,26 @@ status_command() {
 		fi
 	fi
 
+	# --- Config loading ---
+	local -a inc_layers=('') exc_layers=('')
+	inc_layers[1]='' exc_layers[1]=''
+	inc_layers[2]='' exc_layers[2]=''
+	local -a re_exclude=(0 0 0)
+
+	load_config_multi_joined sync.include inc_layers 0 || true
+	load_config_multi_joined sync.exclude exc_layers 0 || true
+	load_config_multi_joined sync.status.include inc_layers 1 || true
+	load_config_multi_joined sync.status.exclude exc_layers 1 || true
+
+	if ((${#included_patterns[@]} > 0)); then
+		inc_layers[2]="$(printf '%s\n' "${included_patterns[@]}")"
+	fi
+	if ((${#excluded_patterns[@]} > 0)); then
+		exc_layers[2]="$(printf '%s\n' "${excluded_patterns[@]}")"
+	fi
+
+	resolve_patterns inc_layers exc_layers re_exclude
+
 	declare -A ref_map_a=()
 	declare -A ref_map_b=()
 	load_ref_set "$remote_a_source" "$remote_a_name" "$tags_mode" ref_map_a
@@ -1026,7 +1188,7 @@ status_command() {
 	local -A behind_counts=()
 	local -A ahead_counts=()
 
-	compute_ref_categories ref_map_a ref_map_b "$direction_mode" included_patterns excluded_patterns refs_by_cat behind_counts ahead_counts
+	compute_ref_categories ref_map_a ref_map_b "$direction_mode" inc_layers exc_layers re_exclude refs_by_cat behind_counts ahead_counts
 	apply_subset_filters subset_filters refs_by_cat
 
 	local -a categories=(missing new different behind ahead diverged same)
@@ -1048,6 +1210,25 @@ status_command() {
 
 	local expand_threshold=5
 	local collapse_threshold=50
+
+	local _cfg_val
+	if _cfg_val=$(load_config_scalar sync.status.expand); then
+		if [[ "$_cfg_val" =~ ^[0-9]+$ ]]; then
+			expand_threshold="$_cfg_val"
+		else
+			printf 'Invalid value for sync.status.expand: %s (must be integer)\n' "$_cfg_val" >&2
+			exit 1
+		fi
+	fi
+	if _cfg_val=$(load_config_scalar sync.status.collapse); then
+		if [[ "$_cfg_val" =~ ^[0-9]+$ ]]; then
+			collapse_threshold="$_cfg_val"
+		else
+			printf 'Invalid value for sync.status.collapse: %s (must be integer)\n' "$_cfg_val" >&2
+			exit 1
+		fi
+	fi
+
 	local printed_sections=0
 
 	for cat in "${categories[@]}"; do
@@ -1330,6 +1511,14 @@ align_command() {
 		esac
 	done
 
+	# Load on-failure from config (CLI overrides it above if present).
+	local _cfg_on_failure
+	if _cfg_on_failure=$(load_config_scalar sync.align.on-failure); then
+		if [[ "$on_failure" == 'interactive' ]]; then
+			on_failure="$_cfg_on_failure"
+		fi
+	fi
+
 	case "$on_failure" in
 		continue|fail-fast|interactive)
 			;;
@@ -1409,6 +1598,26 @@ align_command() {
 		exit 1
 	fi
 
+	# --- Config loading ---
+	local -a inc_layers=('') exc_layers=('')
+	inc_layers[1]='' exc_layers[1]=''
+	inc_layers[2]='' exc_layers[2]=''
+	local -a re_exclude=(0 0 0)
+
+	load_config_multi_joined sync.include inc_layers 0 || true
+	load_config_multi_joined sync.exclude exc_layers 0 || true
+	load_config_multi_joined sync.align.include inc_layers 1 || true
+	load_config_multi_joined sync.align.exclude exc_layers 1 || true
+
+	if ((${#included_patterns[@]} > 0)); then
+		inc_layers[2]="$(printf '%s\n' "${included_patterns[@]}")"
+	fi
+	if ((${#excluded_patterns[@]} > 0)); then
+		exc_layers[2]="$(printf '%s\n' "${excluded_patterns[@]}")"
+	fi
+
+	resolve_patterns inc_layers exc_layers re_exclude
+
 	declare -A ref_map_a=()
 	declare -A ref_map_b=()
 	load_ref_set "$source_mode" "$source_name" "$tags_mode" ref_map_a
@@ -1418,7 +1627,7 @@ align_command() {
 	declare -A behind_counts=()
 	declare -A ahead_counts=()
 
-	compute_ref_categories ref_map_a ref_map_b "$direction_mode" included_patterns excluded_patterns refs_by_cat behind_counts ahead_counts
+	compute_ref_categories ref_map_a ref_map_b "$direction_mode" inc_layers exc_layers re_exclude refs_by_cat behind_counts ahead_counts
 	apply_subset_filters subset_filters refs_by_cat
 
 	# Exclude new (deletions) by default unless --all or --subset new.

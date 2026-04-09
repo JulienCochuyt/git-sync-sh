@@ -124,6 +124,72 @@ Use `--subset` to restrict which categories are reported (`status`) or processed
   `--porcelain` and `--name-only` always emit all categories; use `--subset -same` to exclude `same`.
 - **`align`** defaults to all categories except `new` and `same`. Use `--all` or `--subset +new` to include deletions. `same` is never valid for `align`.
 
+## Configuration
+
+Defaults can be set via `git config` under a `sync.*` namespace.
+Both `status` and `align` share the same include/exclude and config keys.
+
+```bash
+git config sync.include 'release/*'
+git config --add sync.include 'main'
+git config sync.exclude 'dependabot/*'
+git config sync.align.on-failure abort
+git config sync.status.expand 5
+git config sync.status.collapse 100
+```
+
+| Key | Scope | Description |
+|-----|-------|-------------|
+| `sync.include` | shared | Shell glob patterns selecting which refs to process (multi-value). |
+| `sync.exclude` | shared | Shell glob patterns excluding refs (multi-value). |
+| `sync.status.include` / `sync.align.include` | per-command | Override shared includes for one command. |
+| `sync.status.exclude` / `sync.align.exclude` | per-command | Override shared excludes for one command. |
+| `sync.status.expand` | status | Expand normally-collapsed categories when count ≤ N (default 5). |
+| `sync.status.collapse` | status | Collapse normally-expanded categories when count ≥ N (default 50). |
+| `sync.align.on-failure` | align | Failure strategy: `continue`, `fail-fast`, or `interactive` (default). |
+
+### Include / Exclude Filtering
+
+Ref filtering uses shell glob patterns and is available on both commands via CLI flags and config:
+
+| Flag | Purpose |
+|------|---------|
+| `-i`, `--include <pattern>` | Include refs matching a shell glob. Repeatable. |
+| `-I`, `--include-from <file>` | Read include patterns from a file (one per line, `#` comments). |
+| `-x`, `--exclude <pattern>` | Exclude refs matching a shell glob. Repeatable. |
+| `-X`, `--exclude-from <file>` | Read exclude patterns from a file (one per line, `#` comments). |
+
+Patterns are resolved in three layers — shared config, per-command config, then CLI — with the following merge rules:
+
+- **Includes** — CLI replaces earlier layers by default. Pass `-i +` to merge with config includes instead.
+- **Excludes** — CLI merges with earlier layers by default. Pass `-x -` to replace config excludes, or `-x +` to re-assert all accumulated excludes after includes.
+
+When no include patterns are specified anywhere, all refs are included.
+When no exclude patterns are specified, nothing is excluded.
+
+Excludes are applied after includes, but layer by layer: each layer's excludes
+only apply to that layer's own includes. This means a later layer can introduce
+refs that were excluded in an earlier layer. Pass `-x +` to re-assert all
+accumulated excludes against the current layer's includes — useful when you
+want to add refs via `-i +` while keeping earlier safety-net exclusions.
+
+Example — sync only `release/*` branches, excluding temporaries:
+
+```bash
+# Via config (persistent)
+git config sync.include 'release/*'
+git config sync.exclude 'release/tmp-*'
+
+# Via CLI (one-off)
+git sync status -i 'release/*' -x 'release/tmp-*' origin upstream
+```
+
+Example — add a CLI include on top of config patterns:
+
+```bash
+git sync status -i + -i 'hotfix/*' origin upstream
+```
+
 ## Tests
 
 Run the test suite:
