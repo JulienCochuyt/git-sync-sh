@@ -41,7 +41,9 @@ git sync help
 
 ```
 git sync status [<options>]
+git sync status [<options>] @
 git sync status [<options>] [@]<remote>
+git sync status [<options>] <remote> @
 git sync status [<options>] [@]<remote> [@]<remote>
 ```
 
@@ -51,10 +53,16 @@ By default, `status` reads local tracking refs (`refs/remotes/<remote>/*`).
 Prefix a remote with `@` to query it live via `git ls-remote` instead.
 For tags (`-t`), remotes are always queried via `ls-remote`.
 
+Bare `@` (without a remote name) resolves the default remote and compares its
+local tracking refs against its live state — a quick pre-fetch check. With two
+remotes, bare `@` inherits the other remote's name. Not supported with `--tags`.
+
 Examples:
 
 ```bash
+git sync status @
 git sync status origin
+git sync status origin @
 git sync status origin upstream
 git sync status @origin @upstream
 git sync status -t origin upstream

@@ -54,7 +54,9 @@ usage_status() {
 	cat <<'EOF'
 Usage:
 	git sync status [<options>]
+	git sync status [<options>] @
 	git sync status [<options>] [@]<remote>
+	git sync status [<options>] <remote> @
 	git sync status [<options>] [@]<remote> [@]<remote>
 
 	With no remote, uses the upstream of the current branch, or the
@@ -65,6 +67,11 @@ Usage:
 	By default, reads local tracking refs (refs/remotes/<remote>/*).
 	Prefix a remote with @ to query it live via git ls-remote instead.
 	For tags (-t), remotes are always queried via ls-remote.
+
+	Bare @ (without a remote name) resolves the default remote and
+	compares its local tracking refs against its live state — a quick
+	pre-fetch check. With two remotes, bare @ inherits the other
+	remote's name. Not supported with --tags.
 
 Options:
 	-p, --porcelain   Machine-readable output.
@@ -107,7 +114,9 @@ Options:
 
 Examples:
 	git sync status
+	git sync status @
 	git sync status origin
+	git sync status origin @
 	git sync status origin upstream
 	git sync status -t origin
 	git sync status -t origin upstream
@@ -1016,6 +1025,42 @@ status_command() {
 		printf 'status accepts at most two arguments.\n\n' >&2
 		usage_hint_status
 		exit 1
+	fi
+
+	# Expand bare @ shorthand:
+	#   @           → <default_remote> @<default_remote>
+	#   <remote> @  → <remote> @<remote>
+	#   @ <remote>  → @<remote> <remote>
+	# Not supported with --tags (use "git sync status -t" instead).
+	if ((tags_mode == 1)); then
+		if (($# == 1)) && [[ "$1" == '@' ]]; then
+			printf 'Bare @ is not supported with --tags. Use "git sync status -t" to compare local tags against the default remote.\n\n' >&2
+			usage_hint_status
+			exit 1
+		elif (($# == 2)) && { [[ "$1" == '@' ]] || [[ "$2" == '@' ]]; }; then
+			printf 'Bare @ is not supported with --tags. Use "git sync status -t" to compare local tags against the default remote.\n\n' >&2
+			usage_hint_status
+			exit 1
+		fi
+	fi
+	if (($# == 1)) && [[ "$1" == '@' ]]; then
+		local default_remote
+		if ! default_remote="$(resolve_default_remote)"; then
+			printf 'Cannot determine default remote. Set an upstream or specify a remote.\n\n' >&2
+			usage_hint_status
+			exit 1
+		fi
+		set -- "$default_remote" "@${default_remote}"
+	elif (($# == 2)); then
+		if [[ "$1" == '@' && "$2" == '@' ]]; then
+			printf 'Cannot use bare @ for both arguments.\n\n' >&2
+			usage_hint_status
+			exit 1
+		elif [[ "$1" == '@' ]]; then
+			set -- "@${2#@}" "$2"
+		elif [[ "$2" == '@' ]]; then
+			set -- "$1" "@${1#@}"
+		fi
 	fi
 
 	if ((name_only == 1)) && ((porcelain == 1)); then
