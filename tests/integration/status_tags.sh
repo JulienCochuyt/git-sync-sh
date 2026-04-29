@@ -149,6 +149,39 @@ assert_contains "$out_all" 'Same:' \
 	&& assert_not_contains "$out_all" 'No tags to report' \
 	&& end_test_ok
 
+begin_test 'status -ta: shows only annotated tags'
+local out_anno
+out_anno="$(bash "$SCRIPT_UNDER_TEST" status -ta --name-only "$src" "$tgt")"
+assert_contains "$out_anno" 'anno_tag' \
+	&& assert_not_contains "$out_anno" 'shared_tag' \
+	&& assert_not_contains "$out_anno" 'only_origin_tag' \
+	&& assert_not_contains "$out_anno" 'diff_tag' \
+	&& end_test_ok
+
+begin_test 'status -tA: shows only lightweight tags'
+local out_light
+out_light="$(bash "$SCRIPT_UNDER_TEST" status -tA --name-only "$src" "$tgt")"
+assert_not_contains "$out_light" 'anno_tag' \
+	&& assert_contains "$out_light" 'shared_tag' \
+	&& assert_contains "$out_light" 'only_origin_tag' \
+	&& assert_contains "$out_light" 'diff_tag' \
+	&& end_test_ok
+
+begin_test 'status -t --annotated --lightweight: mutually exclusive (error)'
+local rc_excl=0
+bash "$SCRIPT_UNDER_TEST" status -t --annotated --lightweight --name-only "$src" "$tgt" &>/dev/null || rc_excl=$?
+assert_status 1 "$rc_excl" && end_test_ok
+
+begin_test 'status: --annotated without --tags rejected'
+local rc_no_t=0
+bash "$SCRIPT_UNDER_TEST" status --annotated origin upstream &>/dev/null || rc_no_t=$?
+assert_status 1 "$rc_no_t" && end_test_ok
+
+begin_test 'status: --lightweight without --tags rejected'
+local rc_no_t2=0
+bash "$SCRIPT_UNDER_TEST" status --lightweight origin upstream &>/dev/null || rc_no_t2=$?
+assert_status 1 "$rc_no_t2" && end_test_ok
+
 report_results
 }
 run_tests

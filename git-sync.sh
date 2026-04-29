@@ -77,6 +77,8 @@ Options:
 	-p, --porcelain   Machine-readable output.
 	--name-only       Output only branch/tag names (one per line).
 	-t, --tags        Compare tags instead of branches.
+	-a, --annotated   With --tags, show only annotated tags.
+	-A, --lightweight With --tags, show only lightweight tags.
 	-s, --subset <category[,category...]>
 	                  Restrict output to selected categories.
 	                  Categories: new, missing, different, behind,
@@ -129,6 +131,8 @@ Usage:
 Options:
 	-n, --dry-run       Show actions without pushing.
 	-t, --tags          Align tags instead of branches.
+	-a, --annotated     With --tags, process only annotated tags.
+	-A, --lightweight   With --tags, process only lightweight tags.
 	--on-failure <strategy>
 	                    Failure strategy: continue, fail-fast, interactive.
 	                    Default: interactive.
@@ -421,10 +425,13 @@ resolve_default_remote() {
 
 # ls-remote lists annotated tags twice: the tag object and the peeled (^{}) commit.
 # We prefer the peeled hash so comparisons use the underlying commit.
+# $3 = tag_type filter: 0=all, 1=annotated only, 2=lightweight only.
 load_remote_tags() {
 	local remote="$1"
 	local -n out_map="$2"
+	local tag_type="${3:-0}"
 
+	local -A _annotated_set=()
 	local hash ref tag_name base_name
 	while IFS=$'\t' read -r hash ref; do
 		[[ -z "$hash" || -z "$ref" ]] && continue
@@ -432,6 +439,7 @@ load_remote_tags() {
 		if [[ "$ref" == refs/tags/*^{} ]]; then
 			base_name="${ref#refs/tags/}"
 			base_name="${base_name%^\{\}}"
+			_annotated_set["$base_name"]=1
 			out_map["$base_name"]="$hash"
 			continue
 		fi
@@ -442,19 +450,40 @@ load_remote_tags() {
 			out_map["$tag_name"]="$hash"
 		fi
 	done < <(git ls-remote "$remote" 'refs/tags/*')
+
+	# Apply tag type filter.
+	if ((tag_type != 0)); then
+		for tag_name in "${!out_map[@]}"; do
+			if ((tag_type == 1)) && [[ -z "${_annotated_set[$tag_name]+x}" ]]; then
+				unset 'out_map[$tag_name]'
+			elif ((tag_type == 2)) && [[ -n "${_annotated_set[$tag_name]+x}" ]]; then
+				unset 'out_map[$tag_name]'
+			fi
+		done
+	fi
 }
 
 # %(*objectname) is the peeled hash for annotated tags, empty for lightweight.
 # Uses pipe delimiter (not tab) so empty %(*objectname) produces a real empty
 # field — consecutive IFS whitespace characters are folded by bash read.
+# $2 = tag_type filter: 0=all, 1=annotated only, 2=lightweight only.
 load_local_tags() {
 	local -n out_map="$1"
+	local tag_type="${2:-0}"
 
 	local object_hash peeled_hash ref tag_name selected_hash
 	while IFS='|' read -r object_hash peeled_hash ref; do
 		[[ -z "$object_hash" || -z "$ref" ]] && continue
 		tag_name="${ref#refs/tags/}"
 		[[ "$tag_name" == "$ref" ]] && continue
+
+		# Filter by tag type.
+		if ((tag_type == 1)) && [[ -z "$peeled_hash" ]]; then
+			continue  # want annotated only, skip lightweight
+		fi
+		if ((tag_type == 2)) && [[ -n "$peeled_hash" ]]; then
+			continue  # want lightweight only, skip annotated
+		fi
 
 		selected_hash="$object_hash"
 		if [[ -n "$peeled_hash" ]]; then
@@ -668,12 +697,13 @@ load_ref_set() {
 	local ref="$2"
 	local tags_mode="$3"
 	local -n target_map="$4"
+	local tag_type="${5:-0}"
 
 	if ((tags_mode == 1)); then
 		if [[ "$ref_mode" == 'remote' ]]; then
-			load_remote_tags "$ref" target_map
+			load_remote_tags "$ref" target_map "$tag_type"
 		else
-			load_local_tags target_map
+			load_local_tags target_map "$tag_type"
 		fi
 	else
 		if [[ "$ref_mode" == 'remote' ]]; then
@@ -893,6 +923,7 @@ status_command() {
 	local porcelain=0
 	local direction_mode='none'
 	local tags_mode=0
+	local tag_type=0
 	local name_only=0
 	local -a included_patterns=()
 	local -a excluded_patterns=()
@@ -917,6 +948,24 @@ status_command() {
 				;;
 			-t|--tags)
 				tags_mode=1
+				shift
+				;;
+			-a|--annotated)
+				if ((tag_type == 2)); then
+					printf 'Options --annotated and --lightweight are mutually exclusive.\n\n' >&2
+					usage_hint_status
+					exit 1
+				fi
+				tag_type=1
+				shift
+				;;
+			-A|--lightweight)
+				if ((tag_type == 1)); then
+					printf 'Options --annotated and --lightweight are mutually exclusive.\n\n' >&2
+					usage_hint_status
+					exit 1
+				fi
+				tag_type=2
 				shift
 				;;
 			--name-only)
@@ -1051,6 +1100,12 @@ status_command() {
 
 	if ((name_only == 1)) && ((porcelain == 1)); then
 		printf 'Options --name-only and --porcelain are mutually exclusive.\n\n' >&2
+		usage_hint_status
+		exit 1
+	fi
+
+	if ((tag_type != 0)) && ((tags_mode == 0)); then
+		printf 'Options --annotated and --lightweight require --tags.\n\n' >&2
 		usage_hint_status
 		exit 1
 	fi
@@ -1207,8 +1262,8 @@ status_command() {
 
 	declare -A ref_map_a=()
 	declare -A ref_map_b=()
-	load_ref_set "$remote_a_source" "$remote_a_name" "$tags_mode" ref_map_a
-	load_ref_set "$remote_b_source" "$remote_b_name" "$tags_mode" ref_map_b
+	load_ref_set "$remote_a_source" "$remote_a_name" "$tags_mode" ref_map_a "$tag_type"
+	load_ref_set "$remote_b_source" "$remote_b_name" "$tags_mode" ref_map_b "$tag_type"
 
 	declare -A refs_by_cat=()
 	local -A behind_counts=()
@@ -1379,6 +1434,7 @@ align_delete_remote_ref() {
 align_command() {
 	local dry_run=0
 	local tags_mode=0
+	local tag_type=0
 	local verbose=0
 	local yes_mode=0
 	local on_failure='interactive'
@@ -1411,6 +1467,24 @@ align_command() {
 				;;
 			-t|--tags)
 				tags_mode=1
+				shift
+				;;
+			-a|--annotated)
+				if ((tag_type == 2)); then
+					printf 'Options --annotated and --lightweight are mutually exclusive.\n\n' >&2
+					usage_hint_align
+					exit 1
+				fi
+				tag_type=1
+				shift
+				;;
+			-A|--lightweight)
+				if ((tag_type == 1)); then
+					printf 'Options --annotated and --lightweight are mutually exclusive.\n\n' >&2
+					usage_hint_align
+					exit 1
+				fi
+				tag_type=2
 				shift
 				;;
 			-y|--yes)
@@ -1556,6 +1630,12 @@ align_command() {
 		exit 1
 	fi
 
+	if ((tag_type != 0)) && ((tags_mode == 0)); then
+		printf 'Options --annotated and --lightweight require --tags.\n\n' >&2
+		usage_hint_align
+		exit 1
+	fi
+
 	local source_ref="$1"
 	local target_ref="$2"
 	local source_name=''
@@ -1641,8 +1721,8 @@ align_command() {
 
 	declare -A ref_map_a=()
 	declare -A ref_map_b=()
-	load_ref_set "$source_mode" "$source_name" "$tags_mode" ref_map_a
-	load_ref_set "$target_mode" "$target_name" "$tags_mode" ref_map_b
+	load_ref_set "$source_mode" "$source_name" "$tags_mode" ref_map_a "$tag_type"
+	load_ref_set "$target_mode" "$target_name" "$tags_mode" ref_map_b "$tag_type"
 
 	declare -A refs_by_cat=()
 	declare -A behind_counts=()

@@ -66,6 +66,8 @@ git sync status origin @
 git sync status origin upstream
 git sync status @origin @upstream
 git sync status -t origin upstream
+git sync status -ta origin upstream
+git sync status -tA origin upstream
 git sync status -p origin upstream
 git sync status --subset missing,behind origin upstream
 git sync status -i 'release/*' -x 'release/tmp-*' origin upstream
@@ -121,7 +123,7 @@ Each ref is classified into exactly one category:
 **Availability by ref type:**
 
 - **Branches** — `behind`, `ahead`, `diverged` are available when both sides have local refs. When one side uses `@remote`, only one direction is detectable (`behind` if source is local, `ahead` if target is local); the rest appear as `different`. When both sides use `@remote`, all differing branches appear as `different`.
-- **Tags** — Differing tags are always classified as `different` (no direction).
+- **Tags** — Differing tags are always classified as `different` (no direction). Use `--annotated` (`-a`) or `--lightweight` (`-A`) to filter by tag type.
 - `new`, `missing`, and `same` are always available.
 
 **`--subset` filtering:**

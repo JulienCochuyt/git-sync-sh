@@ -101,6 +101,28 @@ local rc_at=0
 bash "$SCRIPT_UNDER_TEST" align -t "@${bare_a}" "@${bare_b}" &>/dev/null </dev/null || rc_at=$?
 assert_status 1 "$rc_at" && end_test_ok
 
+begin_test 'align -t --annotated: filters to annotated only'
+# Add an annotated tag to source only
+create_annotated_tag "$work" anno_only "$hash_base" 'annotated'
+push_tag "$work" origin anno_only
+local out_anno
+out_anno="$(bash "$SCRIPT_UNDER_TEST" align -ta -n "$src" "$tgt" </dev/null 2>&1)"
+assert_contains "$out_anno" 'anno_only' \
+	&& assert_not_contains "$out_anno" 'missing_tag' \
+	&& end_test_ok
+
+begin_test 'align -t --lightweight: filters to lightweight only'
+local out_light
+out_light="$(bash "$SCRIPT_UNDER_TEST" align -tA -n "$src" "$tgt" </dev/null 2>&1)"
+assert_not_contains "$out_light" 'anno_only' \
+	&& assert_contains "$out_light" 'missing_tag' \
+	&& end_test_ok
+
+begin_test 'align: --annotated without --tags rejected'
+local rc_no_t=0
+bash "$SCRIPT_UNDER_TEST" align --annotated -n origin upstream </dev/null &>/dev/null || rc_no_t=$?
+assert_status 1 "$rc_no_t" && end_test_ok
+
 report_results
 }
 run_tests
