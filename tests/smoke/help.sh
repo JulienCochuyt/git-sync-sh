@@ -16,10 +16,6 @@ rc=0; out=$(run_script) || rc=$?
 assert_status 1 "$rc" && assert_contains "$out" 'Usage' && end_test_ok
 
 # --- help variants ---
-begin_test 'help exits zero'
-rc=0; out=$(run_script help) || rc=$?
-assert_status 0 "$rc" && assert_contains "$out" 'Commands' && end_test_ok
-
 begin_test '-h exits zero'
 rc=0; out=$(run_script -h) || rc=$?
 assert_status 0 "$rc" && assert_contains "$out" 'Commands' && end_test_ok

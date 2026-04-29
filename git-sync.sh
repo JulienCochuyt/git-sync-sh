@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: GPL-2.0-only
 set -euo pipefail
 
+readonly GIT_SYNC_VERSION='1.0.0'
+
 readonly COLOR_RED=$'\033[31m'
 readonly COLOR_GREEN=$'\033[32m'
 readonly COLOR_YELLOW=$'\033[33m'
@@ -27,7 +29,10 @@ Usage:
 Commands:
 	status   Compare branches or tags across remotes or against the working copy.
 	align    Push branches or tags from source to target.
-	help     Show this help.
+
+Options:
+	-h, --help       Show this help.
+	    --version    Print version.
 
 Configuration:
 	Defaults can be set via git config. Example:
@@ -1959,8 +1964,11 @@ main() {
 		align)
 			align_command "$@"
 			;;
-		-h|--help|help)
+		-h|--help)
 			usage_main
+			;;
+		--version)
+			printf 'git-sync version %s\n' "$GIT_SYNC_VERSION"
 			;;
 		*)
 			printf 'Unknown command: %s\n\n' "$command" >&2
