@@ -196,7 +196,7 @@ local out13
 out13="$(bash "$SCRIPT_UNDER_TEST" status origin upstream 2>&1)"
 # Should not see '...' collapsed indicator for low counts
 local rc13=0
-echo "$out13" | grep -q 'use --all' && rc13=1 || true
+echo "$out13" | grep -q 'use --subset' && rc13=1 || true
 assert_status 0 "$rc13" 'high expand shows details'
 git config --unset sync.status.expand
 end_test_ok
@@ -214,13 +214,13 @@ assert_status 0 0 'command succeeded'
 git config --unset sync.status.collapse
 end_test_ok
 
-# --- --all overrides collapse threshold ---
-begin_test 'config: --all overrides collapse threshold'
+# --- --subset +same overrides collapse threshold ---
+begin_test 'config: --subset +same overrides collapse threshold'
 git config sync.status.collapse 1
 local out15
-out15="$(bash "$SCRIPT_UNDER_TEST" status --all origin upstream 2>&1)"
+out15="$(bash "$SCRIPT_UNDER_TEST" status --subset +same origin upstream 2>&1)"
 local rc15=$?
-assert_status 0 "$rc15" 'command succeeded with --all'
+assert_status 0 "$rc15" 'command succeeded with --subset +same'
 git config --unset sync.status.collapse
 end_test_ok
 

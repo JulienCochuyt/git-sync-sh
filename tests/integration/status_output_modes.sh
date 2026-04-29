@@ -141,16 +141,6 @@ bash "$SCRIPT_UNDER_TEST" status origin upstream extra &>/dev/null || rc5=$?
 assert_status 1 "$rc5" && end_test_ok
 
 # --- Combined short options ---
-begin_test 'status: -pa rejected (--all not supported with --porcelain)'
-local rc_pa=0
-bash "$SCRIPT_UNDER_TEST" status -pa origin upstream &>/dev/null || rc_pa=$?
-assert_status 1 "$rc_pa" && end_test_ok
-
-begin_test 'status: --all --name-only rejected'
-local rc_ano=0
-bash "$SCRIPT_UNDER_TEST" status --all --name-only origin upstream &>/dev/null || rc_ano=$?
-assert_status 1 "$rc_ano" && end_test_ok
-
 begin_test 'status: -ps behind expands to -p -s behind'
 local combo_ps
 combo_ps="$(bash "$SCRIPT_UNDER_TEST" status -ps behind origin upstream)"
@@ -158,12 +148,12 @@ local sep_ps
 sep_ps="$(bash "$SCRIPT_UNDER_TEST" status -p -s behind origin upstream)"
 assert_eq "$combo_ps" "$sep_ps" '-ps matches -p -s' && end_test_ok
 
-begin_test 'status: -ta works (combined flag + flag)'
-local combo_ta
-combo_ta="$(bash "$SCRIPT_UNDER_TEST" status -ta @origin @upstream)"
-local sep_ta
-sep_ta="$(bash "$SCRIPT_UNDER_TEST" status -t -a @origin @upstream)"
-assert_eq "$combo_ta" "$sep_ta" '-ta matches -t -a' && end_test_ok
+begin_test 'status: -ts works (combined flag + flag)'
+local combo_ts
+combo_ts="$(bash "$SCRIPT_UNDER_TEST" status -ts same origin upstream)"
+local sep_ts
+sep_ts="$(bash "$SCRIPT_UNDER_TEST" status -t -s same origin upstream)"
+assert_eq "$combo_ts" "$sep_ts" '-ts matches -t -s' && end_test_ok
 
 # --- Porcelain tab-separated format ---
 begin_test 'status -p: tab-separated columns'

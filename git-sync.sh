@@ -76,9 +76,6 @@ Usage:
 Options:
 	-p, --porcelain   Machine-readable output.
 	--name-only       Output only branch/tag names (one per line).
-	-a, --all         Expand all sections in human-readable output.
-	                  Not supported with --porcelain or --name-only.
-
 	-t, --tags        Compare tags instead of branches.
 	-s, --subset <category[,category...]>
 	                  Restrict output to selected categories.
@@ -139,9 +136,7 @@ Options:
 	-F, --force-with-lease
 	                    Use --force-with-lease for push attempts.
 	-v, --verbose       Print git commands as they are executed.
-	-a, --all           Include all categories, including new (deletions).
-	                    Without --all or --subset new, refs only in the
-	                    target are excluded.
+
 	-y, --yes           Skip interactive confirmation before deleting
 	                    refs (category new).
 
@@ -202,12 +197,9 @@ sort_lines() {
 
 # Determine if a category should be shown in detail.
 # Args: $1 = normally_collapsed (0 or 1), $2 = count,
-#       $3 = expand threshold, $4 = collapse threshold, $5 = show_all
+#       $3 = expand threshold, $4 = collapse threshold
 should_show_details() {
-	local normally_collapsed=$1 count=$2 expand=$3 collapse=$4 show_all=$5
-	if ((show_all == 1)); then
-		return 0
-	fi
+	local normally_collapsed=$1 count=$2 expand=$3 collapse=$4
 	if ((normally_collapsed == 1)); then
 		((count <= expand))
 		return
@@ -899,7 +891,6 @@ status_print_name_only() {
 
 status_command() {
 	local porcelain=0
-	local show_all=0
 	local direction_mode='none'
 	local tags_mode=0
 	local name_only=0
@@ -945,11 +936,6 @@ status_command() {
 				add_subset_categories_or_exit "${1#--subset=}" subset_plain subset_add subset_remove hint_status
 				shift
 				;;
-			-a|--all)
-				show_all=1
-				shift
-				;;
-
 			-i|--include)
 				if (($# < 2)); then
 					printf 'Option %s requires a value.\n\n' "$1" >&2
@@ -1069,11 +1055,6 @@ status_command() {
 		exit 1
 	fi
 
-	if ((show_all == 1)) && { ((porcelain == 1)) || ((name_only == 1)); }; then
-		printf 'Option --all is not supported with --porcelain or --name-only.\n\n' >&2
-		usage_hint_status
-		exit 1
-	fi
 
 	local remote_a_ref=''
 	local remote_b_ref=''
@@ -1313,7 +1294,7 @@ status_command() {
 		((printed_sections == 0)) || printf '\n'
 
 		if should_show_details "$_normally_collapsed" "$_count" \
-				"$expand_threshold" "$collapse_threshold" "$show_all"; then
+				"$expand_threshold" "$collapse_threshold"; then
 			# Sort and optionally decorate only when showing detail.
 			local -a _sorted=()
 			mapfile -t _sorted < <(sort_lines "${_refs[@]}")
@@ -1330,7 +1311,7 @@ status_command() {
 			esac
 		else
 			printf '%s (%d)\n' "$_title" "$_count"
-			printf '  (Use --all or --subset=%s for detailed list.)\n' "$cat"
+			printf '  (Use --subset=%s for detailed list.)\n' "$cat"
 		fi
 
 		printed_sections=1
@@ -1399,7 +1380,6 @@ align_command() {
 	local dry_run=0
 	local tags_mode=0
 	local verbose=0
-	local show_all=0
 	local yes_mode=0
 	local on_failure='interactive'
 	local force_mode='push'
@@ -1431,10 +1411,6 @@ align_command() {
 				;;
 			-t|--tags)
 				tags_mode=1
-				shift
-				;;
-			-a|--all)
-				show_all=1
 				shift
 				;;
 			-y|--yes)
@@ -1675,8 +1651,8 @@ align_command() {
 	compute_ref_categories ref_map_a ref_map_b "$direction_mode" inc_layers exc_layers re_exclude refs_by_cat behind_counts ahead_counts
 	apply_subset_filters subset_filters refs_by_cat
 
-	# Exclude new (deletions) by default unless --all or --subset new.
-	if ((show_all == 0)) && [[ -z "${subset_filters[new]+x}" ]]; then
+	# Exclude new (deletions) by default unless --subset new.
+	if [[ -z "${subset_filters[new]+x}" ]]; then
 		refs_by_cat[new]=''
 	fi
 

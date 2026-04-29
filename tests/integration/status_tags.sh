@@ -84,9 +84,9 @@ assert_contains "$out4" 'Same: identical in' \
 	&& assert_contains "$out4" 'anno_tag' \
 	&& end_test_ok
 
-begin_test 'status -t --all: identical tags listed'
+begin_test 'status -t --subset +same: identical tags listed'
 local out5
-out5="$(bash "$SCRIPT_UNDER_TEST" status -t --all "$src" "$tgt")"
+out5="$(bash "$SCRIPT_UNDER_TEST" status -t --subset +same "$src" "$tgt")"
 assert_contains "$out5" 'Same: identical in' \
 	&& assert_contains "$out5" 'shared_tag' \
 	&& assert_contains "$out5" 'anno_tag' \
@@ -142,9 +142,9 @@ local out_at
 out_at="$(bash "$SCRIPT_UNDER_TEST" status -t --name-only "@${bare_a}" "@${bare_b}" 2>/dev/null)"
 assert_eq "$out_plain" "$out_at" && end_test_ok
 
-begin_test 'status -t --all: does not print "No tags to report" when same tags exist'
+begin_test 'status -t --subset +same: does not print "No tags to report" when same tags exist'
 local out_all
-out_all="$(bash "$SCRIPT_UNDER_TEST" status -t --all "$src" "$tgt")"
+out_all="$(bash "$SCRIPT_UNDER_TEST" status -t --subset +same "$src" "$tgt")"
 assert_contains "$out_all" 'Same:' \
 	&& assert_not_contains "$out_all" 'No tags to report' \
 	&& end_test_ok

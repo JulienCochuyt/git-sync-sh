@@ -79,11 +79,11 @@ assert_contains "$out3" 'New: only in origin (1)' \
 	&& assert_contains "$out3" 'remote_only_br' \
 	&& end_test_ok
 
-begin_test 'status: single-arg --all shows new details'
+begin_test 'status: single-arg --subset +same shows new details'
 # Note: with only 1 new ref, threshold expansion (test above) produces the
-# same result.  --all is tested distinctly because it bypasses thresholds.
+# same result.  --subset +same is tested distinctly because it bypasses thresholds.
 local out4
-out4="$(bash "$SCRIPT_UNDER_TEST" status --all origin)"
+out4="$(bash "$SCRIPT_UNDER_TEST" status --subset +same origin)"
 assert_contains "$out4" 'New: only in origin' \
 	&& assert_contains "$out4" 'remote_only_br' \
 	&& end_test_ok

@@ -80,11 +80,11 @@ assert_contains "$out4" 'Same: identical in origin and upstream' \
 	&& assert_contains "$out4" 'shared' \
 	&& end_test_ok
 
-begin_test 'status: --all shows identical branches'
+begin_test 'status: --subset +same shows identical branches'
 # Note: with only 2 same branches, threshold expansion (test above) produces
-# the same result.  --all is tested distinctly because it bypasses thresholds.
+# the same result.  --subset +same is tested distinctly because it bypasses thresholds.
 local out5
-out5="$(bash "$SCRIPT_UNDER_TEST" status --all origin upstream)"
+out5="$(bash "$SCRIPT_UNDER_TEST" status --subset +same origin upstream)"
 assert_contains "$out5" 'Same: identical in origin and upstream' \
 	&& assert_contains "$out5" 'main' \
 	&& assert_contains "$out5" 'shared' \
@@ -145,7 +145,7 @@ begin_test 'status: --subset same shows full list in human mode (regression)'
 local out12
 out12="$(bash "$SCRIPT_UNDER_TEST" status --subset same origin upstream)"
 assert_contains "$out12" 'Same: identical in origin and upstream' \
-	&& assert_not_contains "$out12" 'Use --all' \
+	&& assert_not_contains "$out12" 'Use --subset' \
 	&& assert_contains "$out12" 'main' \
 	&& end_test_ok
 
@@ -161,9 +161,9 @@ local out14
 out14="$(bash "$SCRIPT_UNDER_TEST" status --subset same --exclude '*' origin upstream)"
 assert_contains "$out14" 'No branches to report.' && end_test_ok
 
-begin_test 'status --all: does not print "No branches to report" when same branches exist'
+begin_test 'status --subset +same: does not print "No branches to report" when same branches exist'
 local out_all_same
-out_all_same="$(bash "$SCRIPT_UNDER_TEST" status --all origin upstream)"
+out_all_same="$(bash "$SCRIPT_UNDER_TEST" status --subset +same origin upstream)"
 assert_contains "$out_all_same" 'Same:' \
 	&& assert_not_contains "$out_all_same" 'No branches to report' \
 	&& end_test_ok
@@ -175,7 +175,7 @@ assert_contains "$out15" 'Same: identical in origin and upstream' \
 	&& assert_contains "$out15" 'main' \
 	&& assert_contains "$out15" 'shared' \
 	&& assert_contains "$out15" 'only_origin' \
-	&& assert_not_contains "$out15" 'Use --all' \
+	&& assert_not_contains "$out15" 'Use --subset' \
 	&& end_test_ok
 
 begin_test 'status: --subset -new removes new from output'

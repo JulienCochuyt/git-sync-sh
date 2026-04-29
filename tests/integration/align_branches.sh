@@ -75,7 +75,7 @@ assert_contains "$out" 'missing' \
 
 begin_test 'align: new branch marked as delete in dry-run'
 local out2
-out2="$(bash "$SCRIPT_UNDER_TEST" align -n --all origin upstream </dev/null 2>&1)"
+out2="$(bash "$SCRIPT_UNDER_TEST" align -n --subset +new origin upstream </dev/null 2>&1)"
 assert_contains "$out2" 'new' \
 	&& assert_contains "$out2" 'delete' \
 	&& assert_contains "$out2" 'new_br' \
@@ -117,7 +117,7 @@ assert_eq "$sorted_refs" "$refs" 'candidates should be sorted' && end_test_ok
 
 begin_test 'align: dry-run summary has counts'
 local out6
-out6="$(bash "$SCRIPT_UNDER_TEST" align -n --all origin upstream </dev/null 2>&1)"
+out6="$(bash "$SCRIPT_UNDER_TEST" align -n --subset +new origin upstream </dev/null 2>&1)"
 assert_contains "$out6" 'Plan' \
 	&& assert_contains "$out6" 'to push' \
 	&& assert_contains "$out6" 'to delete' \
@@ -148,14 +148,14 @@ local out_no_new
 out_no_new="$(bash "$SCRIPT_UNDER_TEST" align -n origin upstream </dev/null 2>&1)"
 assert_not_contains "$out_no_new" 'new_br' && end_test_ok
 
-begin_test 'align --all: includes new'
+begin_test 'align --subset +new: includes new'
 local out_all
-out_all="$(bash "$SCRIPT_UNDER_TEST" align -n --all origin upstream </dev/null 2>&1)"
+out_all="$(bash "$SCRIPT_UNDER_TEST" align -n --subset +new origin upstream </dev/null 2>&1)"
 assert_contains "$out_all" 'new_br' && end_test_ok
 
 begin_test 'align: delete confirmation skips on non-interactive without --yes'
 local out_noyes
-out_noyes="$(bash "$SCRIPT_UNDER_TEST" align --on-failure continue --all origin upstream </dev/null 2>&1)" || true
+out_noyes="$(bash "$SCRIPT_UNDER_TEST" align --on-failure continue --subset +new origin upstream </dev/null 2>&1)" || true
 assert_contains "$out_noyes" 'Refusing to delete' \
 	&& assert_contains "$out_noyes" 'skipped' \
 	&& end_test_ok
@@ -165,7 +165,7 @@ begin_test 'align --yes: skips delete confirmation'
 push_branch "$work" upstream new_br
 git -C "$work" fetch upstream --prune >/dev/null 2>&1
 local out_yes
-out_yes="$(bash "$SCRIPT_UNDER_TEST" align --on-failure continue --all --yes origin upstream </dev/null 2>&1)" || true
+out_yes="$(bash "$SCRIPT_UNDER_TEST" align --on-failure continue --subset +new --yes origin upstream </dev/null 2>&1)" || true
 assert_contains "$out_yes" 'done: new_br' && end_test_ok
 
 begin_test 'align: dry-run skips delete confirmation'
@@ -173,7 +173,7 @@ begin_test 'align: dry-run skips delete confirmation'
 push_branch "$work" upstream new_br
 git -C "$work" fetch upstream --prune >/dev/null 2>&1
 local out_dry_del
-out_dry_del="$(bash "$SCRIPT_UNDER_TEST" align -n --all origin upstream </dev/null 2>&1)"
+out_dry_del="$(bash "$SCRIPT_UNDER_TEST" align -n --subset +new origin upstream </dev/null 2>&1)"
 assert_not_contains "$out_dry_del" 'Refusing to delete' \
 	&& assert_contains "$out_dry_del" 'new_br' \
 	&& end_test_ok

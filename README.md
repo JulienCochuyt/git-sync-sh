@@ -82,7 +82,7 @@ For branches, local tracking refs are used for comparison; pushes and deletions 
 For tags, remotes are queried via `ls-remote`.
 
 By default, refs only in the target (category `new`) are excluded to prevent
-accidental deletions. Use `--all` or `--subset new` to include them.
+accidental deletions. Use `--subset new` or `--subset +new` to include them.
 When deleting refs, you will be prompted for confirmation. Use `--yes` to skip.
 
 Examples:
@@ -90,7 +90,7 @@ Examples:
 ```bash
 git sync align origin upstream
 git sync align --dry-run origin upstream
-git sync align --all --yes origin upstream
+git sync align --yes --subset +new origin upstream
 git sync align --subset missing,behind origin upstream
 git sync align -t origin upstream
 git sync align --force-with-lease origin upstream
@@ -128,9 +128,9 @@ Each ref is classified into exactly one category:
 
 Use `--subset` to restrict which categories are reported (`status`) or processed (`align`). Categories can be combined with commas. Prefix with `+` to add to, or `-` to remove from, the default set. Plain entries replace the defaults entirely.
 
-- **`status`** defaults to all categories except `same`. Use `--all` or `--subset +same` to include it.
+- **`status`** defaults to all categories except `same`. Use `--subset +same` to include it.
   `--porcelain` and `--name-only` always emit all categories; use `--subset -same` to exclude `same`.
-- **`align`** defaults to all categories except `new` and `same`. Use `--all` or `--subset +new` to include deletions. `same` is never valid for `align`.
+- **`align`** defaults to all categories except `new` and `same`. Use `--subset +new` to include deletions. `same` is never valid for `align`.
 
 ## Configuration
 

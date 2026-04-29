@@ -58,7 +58,7 @@ assert_contains "$out" 'missing' \
 
 begin_test 'align -t: new tag delete in dry-run'
 local out2
-out2="$(bash "$SCRIPT_UNDER_TEST" align -t -n --all "$src" "$tgt" </dev/null 2>&1)"
+out2="$(bash "$SCRIPT_UNDER_TEST" align -t -n --subset +new "$src" "$tgt" </dev/null 2>&1)"
 assert_contains "$out2" 'new' \
 	&& assert_contains "$out2" 'delete' \
 	&& assert_contains "$out2" 'new_tag' \
