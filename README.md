@@ -32,8 +32,21 @@ git config --global alias.sync '!bash ~/git-sync-sh/git-sync.sh'
 Verify the installation:
 
 ```bash
-git sync help
+git sync --version
 ```
+
+## Bash Completion
+
+Optional tab-completion for subcommands, options, remotes, and branch/tag names:
+
+```bash
+source /path/to/git-sync-sh/git-sync-completion.bash
+```
+
+To persist, add the line above to `~/.bashrc` (Linux/macOS) or `~/.bash_profile` (Git for Windows).
+
+If bash-completion is installed, you may also copy the file to its completions directory
+(e.g. `/etc/bash_completion.d/` on Linux, `$(brew --prefix)/etc/bash_completion.d/` on macOS).
 
 ## Usage
 
@@ -101,7 +114,7 @@ git sync align --force-with-lease origin upstream
 ### help
 
 ```bash
-git sync help
+git sync --help
 git sync status --help
 git sync align --help
 ```

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Bash completion script (`git-sync-completion.bash`) with support for
+  subcommands, options, remotes, branch/tag names, subset categories
+  (including `+`/`-` prefixes and comma-separated values), and
+  `--on-failure` strategies.
+
 ### Changed
 
 - Options and positional arguments can now be mixed in any order for both
