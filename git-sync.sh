@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 set -euo pipefail
 
-readonly GIT_SYNC_VERSION='1.1.0-dev'
+readonly GIT_SYNC_VERSION='1.1.0'
 
 readonly COLOR_RED=$'\033[31m'
 readonly COLOR_GREEN=$'\033[32m'

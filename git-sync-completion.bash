@@ -104,13 +104,18 @@ _git_sync() {
 
 	local subcommand=""
 	local has_tags=0
+	local positional_count=0
 	local i
 
-	# Find subcommand and check for --tags/-t
+	# Find subcommand, check for --tags/-t, and count positional args
 	for ((i = 1; i < cword; i++)); do
 		case "${words[i]}" in
 			status|align)
-				[[ -z "$subcommand" ]] && subcommand="${words[i]}"
+				if [[ -z "$subcommand" ]]; then
+					subcommand="${words[i]}"
+				else
+					((positional_count++))
+				fi
 				;;
 			-t|--tags)
 				has_tags=1
@@ -128,6 +133,12 @@ _git_sync() {
 					has_tags=1
 				fi
 				;;
+			*)
+				# Non-option, non-subcommand word = positional arg
+				if [[ -n "$subcommand" ]]; then
+					((positional_count++))
+				fi
+				;;
 		esac
 	done
 
@@ -143,14 +154,17 @@ _git_sync() {
 			return
 			;;
 		--on-failure)
+			compopt +o nospace 2>/dev/null
 			COMPREPLY=($(compgen -W "continue fail-fast interactive" -- "$cur"))
 			return
 			;;
 		-i|--include|-x|--exclude)
+			compopt +o nospace 2>/dev/null
 			COMPREPLY=($(compgen -W "$(_git_sync_refs "$ref_mode")" -- "$cur"))
 			return
 			;;
 		-I|--include-from|-X|--exclude-from)
+			compopt +o nospace 2>/dev/null
 			if declare -f _filedir >/dev/null 2>&1; then
 				_filedir
 			else
@@ -162,19 +176,21 @@ _git_sync() {
 
 	# Complete options
 	if [[ "$cur" == -* ]]; then
+		compopt -o nospace 2>/dev/null
+		local -a opts=()
 		case "$subcommand" in
 			status)
-				COMPREPLY=($(compgen -W "
+				opts=(
 					-h --help
 					-p --porcelain --name-only
 					-t --tags -a --annotated -A --lightweight
 					-s --subset=
 					-i --include= -I --include-from=
 					-x --exclude= -X --exclude-from=
-				" -- "$cur"))
+				)
 				;;
 			align)
-				COMPREPLY=($(compgen -W "
+				opts=(
 					-h --help
 					-n --dry-run -v --verbose -y --yes
 					-t --tags -a --annotated -A --lightweight
@@ -182,26 +198,33 @@ _git_sync() {
 					-s --subset= --on-failure=
 					-i --include= -I --include-from=
 					-x --exclude= -X --exclude-from=
-				" -- "$cur"))
+				)
 				;;
 			*)
-				COMPREPLY=($(compgen -W "-h --help --version" -- "$cur"))
+				opts=(-h --help --version)
 				;;
 		esac
-		# Suppress trailing space when any result ends with =
-		local r
-		for r in "${COMPREPLY[@]}"; do
-			if [[ "$r" == *= ]]; then
-				compopt -o nospace 2>/dev/null
-				break
+		COMPREPLY=($(compgen -W "${opts[*]}" -- "$cur"))
+		# Append trailing space to completions that don't end with =
+		local j
+		for j in "${!COMPREPLY[@]}"; do
+			if [[ "${COMPREPLY[j]}" != *= ]]; then
+				COMPREPLY[j]="${COMPREPLY[j]} "
 			fi
 		done
 		return
 	fi
 
 	# Complete positional arguments
+	compopt +o nospace 2>/dev/null
 	if [[ -z "$subcommand" ]]; then
 		COMPREPLY=($(compgen -W "status align" -- "$cur"))
+		return
+	fi
+
+	# Limit positional args: status accepts 0-2, align requires exactly 2
+	local max_positional=2
+	if ((positional_count >= max_positional)); then
 		return
 	fi
 
