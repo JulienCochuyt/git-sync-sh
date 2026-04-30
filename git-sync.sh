@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 set -euo pipefail
 
-readonly GIT_SYNC_VERSION='1.0.0'
+readonly GIT_SYNC_VERSION='1.1.0-dev'
 
 readonly COLOR_RED=$'\033[31m'
 readonly COLOR_GREEN=$'\033[32m'
@@ -936,6 +936,7 @@ status_command() {
 	local -A subset_add=()
 	local -A subset_remove=()
 	local -A subset_filters=()
+	local -a _positional_args=()
 	while (($# > 0)); do
 		# Expand combined short options (e.g., -ts → -t -s)
 		if [[ "$1" =~ ^-[a-zA-Z]{2,}$ ]]; then
@@ -1042,10 +1043,6 @@ status_command() {
 				load_pattern_file "${1#--exclude-from=}" excluded_patterns hint_status
 				shift
 				;;
-			--)
-				shift
-				break
-				;;
 			-h|--help)
 				usage_status
 				exit 0
@@ -1056,10 +1053,12 @@ status_command() {
 				exit 1
 				;;
 			*)
-				break
+				_positional_args+=("$1")
+				shift
 				;;
 		esac
 	done
+	set -- "${_positional_args[@]}"
 
 	if (($# > 2)); then
 		printf 'status accepts at most two arguments.\n\n' >&2
@@ -1450,6 +1449,7 @@ align_command() {
 	local -A subset_add=()
 	local -A subset_remove=()
 	local -A subset_filters=()
+	local -a _positional_args=()
 
 	while (($# > 0)); do
 		# Expand combined short options (e.g., -nvt → -n -v -t)
@@ -1592,10 +1592,6 @@ align_command() {
 				load_pattern_file "${1#--exclude-from=}" excluded_patterns hint_align
 				shift
 				;;
-			--)
-				shift
-				break
-				;;
 			-h|--help)
 				usage_align
 				exit 0
@@ -1606,10 +1602,12 @@ align_command() {
 				exit 1
 				;;
 			*)
-				break
+				_positional_args+=("$1")
+				shift
 				;;
 		esac
 	done
+	set -- "${_positional_args[@]}"
 
 	# Load on-failure from config (CLI overrides it above if present).
 	local _cfg_on_failure
