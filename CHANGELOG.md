@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- `--subset <bad-category>`, `--include-from <unreadable>`, and
+  `--exclude-from <unreadable>` now exit cleanly with status 1 instead of
+  127. The argument parsers were passing the bare names `hint_status` /
+  `hint_align` as the usage-hint callback, but the actual functions are
+  `usage_hint_status` / `usage_hint_align`, so the error path tried to
+  invoke a non-existent command.
+
 ## [1.1.0] - 2026-04-30
 
 ### Added

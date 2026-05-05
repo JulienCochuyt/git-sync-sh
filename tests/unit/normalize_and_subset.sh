@@ -31,33 +31,33 @@ assert_status 1 "$rc" && end_test_ok
 # --- add_subset_categories_or_exit ---
 begin_test 'add_subset: single category (plain)'
 declare -A sp=() sa=() sr=()
-add_subset_categories_or_exit 'new' sp sa sr hint_status
+add_subset_categories_or_exit 'new' sp sa sr usage_hint_status
 assert_eq '1' "${sp[new]}" && end_test_ok
 
 begin_test 'add_subset: comma-separated categories (plain)'
 declare -A sp2=() sa2=() sr2=()
-add_subset_categories_or_exit 'new,missing,same' sp2 sa2 sr2 hint_status
+add_subset_categories_or_exit 'new,missing,same' sp2 sa2 sr2 usage_hint_status
 assert_eq '1' "${sp2[new]}" && assert_eq '1' "${sp2[missing]}" && assert_eq '1' "${sp2[same]}" && end_test_ok
 
 begin_test 'add_subset: spaces around categories trimmed'
 declare -A sp3=() sa3=() sr3=()
-add_subset_categories_or_exit ' behind , ahead ' sp3 sa3 sr3 hint_status
+add_subset_categories_or_exit ' behind , ahead ' sp3 sa3 sr3 usage_hint_status
 assert_eq '1' "${sp3[behind]}" && assert_eq '1' "${sp3[ahead]}" && end_test_ok
 
 begin_test 'add_subset: empty entry rejected'
 local rc2=0
-(declare -A sp4=() sa4=() sr4=(); add_subset_categories_or_exit 'new,,missing' sp4 sa4 sr4 hint_status) &>/dev/null || rc2=$?
+(declare -A sp4=() sa4=() sr4=(); add_subset_categories_or_exit 'new,,missing' sp4 sa4 sr4 usage_hint_status) &>/dev/null || rc2=$?
 assert_status 1 "$rc2" && end_test_ok
 
 begin_test 'add_subset: unknown category rejected'
 local rc3=0
-(declare -A sp5=() sa5=() sr5=(); add_subset_categories_or_exit 'new,bogus' sp5 sa5 sr5 hint_status) &>/dev/null || rc3=$?
+(declare -A sp5=() sa5=() sr5=(); add_subset_categories_or_exit 'new,bogus' sp5 sa5 sr5 usage_hint_status) &>/dev/null || rc3=$?
 assert_status 1 "$rc3" && end_test_ok
 
 # --- +/- prefix parsing ---
 begin_test 'add_subset: + prefix routed to add map'
 declare -A sp6=() sa6=() sr6=()
-add_subset_categories_or_exit '+same' sp6 sa6 sr6 hint_status
+add_subset_categories_or_exit '+same' sp6 sa6 sr6 usage_hint_status
 assert_eq '' "${sp6[same]+x}" \
 	&& assert_eq '1' "${sa6[same]}" \
 	&& assert_eq '' "${sr6[same]+x}" \
@@ -65,7 +65,7 @@ assert_eq '' "${sp6[same]+x}" \
 
 begin_test 'add_subset: - prefix routed to remove map'
 declare -A sp7=() sa7=() sr7=()
-add_subset_categories_or_exit '-new' sp7 sa7 sr7 hint_status
+add_subset_categories_or_exit '-new' sp7 sa7 sr7 usage_hint_status
 assert_eq '' "${sp7[new]+x}" \
 	&& assert_eq '' "${sa7[new]+x}" \
 	&& assert_eq '1' "${sr7[new]}" \
@@ -73,7 +73,7 @@ assert_eq '' "${sp7[new]+x}" \
 
 begin_test 'add_subset: mixed plain, +, and - entries'
 declare -A sp8=() sa8=() sr8=()
-add_subset_categories_or_exit 'missing,+same,-new' sp8 sa8 sr8 hint_status
+add_subset_categories_or_exit 'missing,+same,-new' sp8 sa8 sr8 usage_hint_status
 assert_eq '1' "${sp8[missing]}" \
 	&& assert_eq '1' "${sa8[same]}" \
 	&& assert_eq '1' "${sr8[new]}" \
@@ -81,7 +81,7 @@ assert_eq '1' "${sp8[missing]}" \
 
 begin_test 'add_subset: empty category after prefix rejected'
 local rc4=0
-(declare -A sp9=() sa9=() sr9=(); add_subset_categories_or_exit '+' sp9 sa9 sr9 hint_status) &>/dev/null || rc4=$?
+(declare -A sp9=() sa9=() sr9=(); add_subset_categories_or_exit '+' sp9 sa9 sr9 usage_hint_status) &>/dev/null || rc4=$?
 assert_status 1 "$rc4" && end_test_ok
 
 # --- resolve_subset_filters ---

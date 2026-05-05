@@ -21,7 +21,7 @@ assert_eq 'upstream' "$local_name" && assert_eq 'remote' "$local_source" && end_
 
 begin_test 'parse_remote_ref: bare @ rejected'
 local rc=0
-(parse_remote_ref '@' _n _s hint_status) &>/dev/null || rc=$?
+(parse_remote_ref '@' _n _s usage_hint_status) &>/dev/null || rc=$?
 assert_status 1 "$rc" 'bare @ should fail' && end_test_ok
 
 report_results

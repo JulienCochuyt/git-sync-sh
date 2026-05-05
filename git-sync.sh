@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 set -euo pipefail
 
-readonly GIT_SYNC_VERSION='1.1.0'
+readonly GIT_SYNC_VERSION='1.1.1-dev'
 
 readonly COLOR_RED=$'\033[31m'
 readonly COLOR_GREEN=$'\033[32m'
@@ -503,7 +503,7 @@ parse_remote_ref() {
 	local input_ref="$1"
 	local -n out_name="$2"
 	local -n out_source="$3"
-	local usage_fn="${4:-hint_status}"
+	local usage_fn="${4:-usage_hint_status}"
 
 	if [[ "$input_ref" == @* ]]; then
 		out_source='remote'
@@ -523,7 +523,7 @@ parse_remote_ref() {
 load_pattern_file() {
 	local file_path="$1"
 	local -n out_patterns="$2"
-	local usage_fn="${3:-hint_status}"
+	local usage_fn="${3:-usage_hint_status}"
 
 	if [[ ! -r "$file_path" ]]; then
 		printf 'Cannot read pattern file: %s\n\n' "$file_path" >&2
@@ -832,7 +832,7 @@ add_subset_categories_or_exit() {
 	local -n out_plain="$2"
 	local -n out_add="$3"
 	local -n out_remove="$4"
-	local usage_fn="${5:-hint_status}"
+	local usage_fn="${5:-usage_hint_status}"
 
 	local -a parts=()
 	local part trimmed normalized prefix
@@ -984,11 +984,11 @@ status_command() {
 					usage_hint_status
 					exit 1
 				fi
-				add_subset_categories_or_exit "$2" subset_plain subset_add subset_remove hint_status
+				add_subset_categories_or_exit "$2" subset_plain subset_add subset_remove usage_hint_status
 				shift 2
 				;;
 			--subset=*)
-				add_subset_categories_or_exit "${1#--subset=}" subset_plain subset_add subset_remove hint_status
+				add_subset_categories_or_exit "${1#--subset=}" subset_plain subset_add subset_remove usage_hint_status
 				shift
 				;;
 			-i|--include)
@@ -1010,11 +1010,11 @@ status_command() {
 					usage_hint_status
 					exit 1
 				fi
-				load_pattern_file "$2" included_patterns hint_status
+				load_pattern_file "$2" included_patterns usage_hint_status
 				shift 2
 				;;
 			--include-from=*)
-				load_pattern_file "${1#--include-from=}" included_patterns hint_status
+				load_pattern_file "${1#--include-from=}" included_patterns usage_hint_status
 				shift
 				;;
 			-x|--exclude)
@@ -1036,11 +1036,11 @@ status_command() {
 					usage_hint_status
 					exit 1
 				fi
-				load_pattern_file "$2" excluded_patterns hint_status
+				load_pattern_file "$2" excluded_patterns usage_hint_status
 				shift 2
 				;;
 			--exclude-from=*)
-				load_pattern_file "${1#--exclude-from=}" excluded_patterns hint_status
+				load_pattern_file "${1#--exclude-from=}" excluded_patterns usage_hint_status
 				shift
 				;;
 			-h|--help)
@@ -1133,21 +1133,21 @@ status_command() {
 		remote_a_source='worktree'
 		if ((tags_mode == 1)); then
 			remote_b_ref="@${default_remote}"
-			parse_remote_ref "$remote_b_ref" remote_b_name remote_b_source hint_status
+			parse_remote_ref "$remote_b_ref" remote_b_name remote_b_source usage_hint_status
 		else
 			remote_b_ref="$default_remote"
-			parse_remote_ref "$remote_b_ref" remote_b_name remote_b_source hint_status
+			parse_remote_ref "$remote_b_ref" remote_b_name remote_b_source usage_hint_status
 		fi
 	elif (($# == 1)); then
 		remote_a_ref='working copy'
 		remote_a_source='worktree'
 		remote_b_ref="$1"
-		parse_remote_ref "$remote_b_ref" remote_b_name remote_b_source hint_status
+		parse_remote_ref "$remote_b_ref" remote_b_name remote_b_source usage_hint_status
 	else
 		remote_a_ref="$1"
 		remote_b_ref="$2"
-		parse_remote_ref "$remote_a_ref" remote_a_name remote_a_source hint_status
-		parse_remote_ref "$remote_b_ref" remote_b_name remote_b_source hint_status
+		parse_remote_ref "$remote_a_ref" remote_a_name remote_a_source usage_hint_status
+		parse_remote_ref "$remote_b_ref" remote_b_name remote_b_source usage_hint_status
 	fi
 
 	# In tags mode, force remote source for both sides (ls-remote).
@@ -1533,11 +1533,11 @@ align_command() {
 					usage_hint_align
 					exit 1
 				fi
-				add_subset_categories_or_exit "$2" subset_plain subset_add subset_remove hint_align
+				add_subset_categories_or_exit "$2" subset_plain subset_add subset_remove usage_hint_align
 				shift 2
 				;;
 			--subset=*)
-				add_subset_categories_or_exit "${1#--subset=}" subset_plain subset_add subset_remove hint_align
+				add_subset_categories_or_exit "${1#--subset=}" subset_plain subset_add subset_remove usage_hint_align
 				shift
 				;;
 			-i|--include)
@@ -1559,11 +1559,11 @@ align_command() {
 					usage_hint_align
 					exit 1
 				fi
-				load_pattern_file "$2" included_patterns hint_align
+				load_pattern_file "$2" included_patterns usage_hint_align
 				shift 2
 				;;
 			--include-from=*)
-				load_pattern_file "${1#--include-from=}" included_patterns hint_align
+				load_pattern_file "${1#--include-from=}" included_patterns usage_hint_align
 				shift
 				;;
 			-x|--exclude)
@@ -1585,11 +1585,11 @@ align_command() {
 					usage_hint_align
 					exit 1
 				fi
-				load_pattern_file "$2" excluded_patterns hint_align
+				load_pattern_file "$2" excluded_patterns usage_hint_align
 				shift 2
 				;;
 			--exclude-from=*)
-				load_pattern_file "${1#--exclude-from=}" excluded_patterns hint_align
+				load_pattern_file "${1#--exclude-from=}" excluded_patterns usage_hint_align
 				shift
 				;;
 			-h|--help)

@@ -75,7 +75,7 @@ assert_eq 1 "${#pats5[@]}" \
 # --- Unreadable file ---
 begin_test 'load_pattern_file: unreadable file exits with error'
 local rc=0
-(load_pattern_file '/nonexistent/file.txt' _x hint_status) &>/dev/null || rc=$?
+(load_pattern_file '/nonexistent/file.txt' _x usage_hint_status) &>/dev/null || rc=$?
 assert_status 1 "$rc" && end_test_ok
 
 report_results
