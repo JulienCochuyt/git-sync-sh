@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 set -euo pipefail
 
-readonly GIT_SYNC_VERSION='1.1.1-dev'
+readonly GIT_SYNC_VERSION='1.2.0-dev'
 
 readonly COLOR_RED=$'\033[31m'
 readonly COLOR_GREEN=$'\033[32m'
@@ -19,6 +19,7 @@ readonly SECTION_COLOR_DIFFERENT="$COLOR_RED"
 readonly SECTION_COLOR_BEHIND="$COLOR_YELLOW"
 readonly SECTION_COLOR_AHEAD="$COLOR_BLUE"
 readonly SECTION_COLOR_DIVERGED="$COLOR_RED"
+readonly SECTION_COLOR_UNRELATED="$COLOR_RED"
 readonly SECTION_COLOR_SAME="$COLOR_GREEN"
 
 usage_main() {
@@ -87,13 +88,14 @@ Options:
 	-s, --subset <category[,category...]>
 	                  Restrict output to selected categories.
 	                  Categories: new, missing, different, behind,
-	                  ahead, diverged, same.
+	                  ahead, diverged, unrelated, same.
 	                  Prefix with + to add to or - to remove from the
 	                  default set (e.g. --subset +same, --subset -new).
 	                  Plain entries replace the defaults entirely.
 
 	                  Availability depends on which sides are local:
-	                    Both local:      behind, ahead, diverged (not different).
+	                    Both local:      behind, ahead, diverged,
+	                                     unrelated (not different).
 	                    Local + @remote: behind or ahead (depending on which
 	                                     side is local) and different.
 	                    Both @remote:    different only.
@@ -156,7 +158,7 @@ Options:
 	                    Plain entries replace the defaults entirely.
 
 	                    Common categories:  new, missing.
-	                    Branches only:      behind, ahead, diverged.
+	                    Branches only:      behind, ahead, diverged, unrelated.
 	                    Tags only:          different.
 
 	-i, --include <pattern>
@@ -315,11 +317,12 @@ print_porcelain_refs() {
 
 
 # Classify how target (hash_b) relates to source (hash_a):
-#   behind   = target is ancestor of source (fast-forwardable)
-#   ahead    = source is ancestor of target
-#   diverged = neither is ancestor of the other
+#   behind    = target is ancestor of source (fast-forwardable)
+#   ahead     = source is ancestor of target
+#   diverged  = neither is ancestor; commits share a common ancestor
+#   unrelated = neither is ancestor; commits share NO common ancestor
 # Modes:
-#   full         — both sides local; behind/ahead/diverged all reliable.
+#   full         — both sides local; behind/ahead/diverged/unrelated all reliable.
 #   ahead-only   — B is local; only ahead is reliably detectable.
 #   behind-only  — A is local; only behind is reliably detectable.
 is_interactive_tty() {
@@ -352,12 +355,23 @@ classify_direction_relation() {
 			;;
 		*)
 			# full: both sides local — all categories available.
-			if git merge-base --is-ancestor "$hash_b" "$hash_a" >/dev/null 2>&1; then
-				printf 'behind\n'
-			elif git merge-base --is-ancestor "$hash_a" "$hash_b" >/dev/null 2>&1; then
-				printf 'ahead\n'
+			# Use a single merge-base call: capture the ancestor hash and
+			# distinguish behind/ahead/diverged/unrelated from one result.
+			# When both hashes are equal mb equals both sides; prefer
+			# `behind` for self-comparison to match the prior `--is-ancestor`
+			# semantics (the legacy code tested B-ancestor-of-A first).
+			local mb
+			if mb=$(git merge-base "$hash_a" "$hash_b" 2>/dev/null); then
+				if [[ "$mb" == "$hash_b" ]]; then
+					printf 'behind\n'
+				elif [[ "$mb" == "$hash_a" ]]; then
+					printf 'ahead\n'
+				else
+					printf 'diverged\n'
+				fi
 			else
-				printf 'diverged\n'
+				# No common ancestor reachable.
+				printf 'unrelated\n'
 			fi
 			;;
 	esac
@@ -734,7 +748,7 @@ compute_ref_categories() {
 
 	# Initialize all category keys to empty.
 	local _cat
-	for _cat in missing new different behind ahead diverged same; do
+	for _cat in missing new different behind ahead diverged unrelated same; do
 		refs_by_cat_ref[$_cat]=''
 	done
 
@@ -769,6 +783,11 @@ compute_ref_categories() {
 					different)
 						refs_by_cat_ref[different]+="$ref"$'\n'
 						;;
+					unrelated)
+						# Counts are meaningless without a common ancestor;
+						# leave behind/ahead maps unset so output renders "-".
+						refs_by_cat_ref[unrelated]+="$ref"$'\n'
+						;;
 					*)
 						refs_by_cat_ref[diverged]+="$ref"$'\n'
 						;;
@@ -788,7 +807,7 @@ compute_ref_categories() {
 	done
 
 	# Strip trailing newlines.
-	for _cat in missing new different behind ahead diverged same; do
+	for _cat in missing new different behind ahead diverged unrelated same; do
 		refs_by_cat_ref[$_cat]="${refs_by_cat_ref[$_cat]%$'\n'}"
 	done
 }
@@ -802,7 +821,7 @@ apply_subset_filters() {
 	fi
 
 	local _cat
-	for _cat in missing new different behind ahead diverged same; do
+	for _cat in missing new different behind ahead diverged unrelated same; do
 		[[ -n "${subset_filters_ref[$_cat]+x}" ]] || refs_by_cat_ref[$_cat]=''
 	done
 }
@@ -810,7 +829,7 @@ apply_subset_filters() {
 normalize_subset_category() {
 	local lower="${1,,}"
 	case "$lower" in
-		new|missing|different|same|behind|ahead|diverged)
+		new|missing|different|same|behind|ahead|diverged|unrelated)
 			printf '%s\n' "$lower"
 			;;
 		*)
@@ -1200,6 +1219,7 @@ status_command() {
 				subset_defaults[behind]=1
 				subset_defaults[ahead]=1
 				subset_defaults[diverged]=1
+				subset_defaults[unrelated]=1
 				;;
 			ahead-only)
 				subset_defaults[ahead]=1
@@ -1218,27 +1238,27 @@ status_command() {
 
 	if ((${#subset_filters[@]} > 0)); then
 		# Validate category legality based on direction mode.
-		if [[ "$direction_mode" == 'none' ]] && { [[ -n "${subset_filters[behind]+x}" ]] || [[ -n "${subset_filters[ahead]+x}" ]] || [[ -n "${subset_filters[diverged]+x}" ]]; }; then
+		if [[ "$direction_mode" == 'none' ]] && { [[ -n "${subset_filters[behind]+x}" ]] || [[ -n "${subset_filters[ahead]+x}" ]] || [[ -n "${subset_filters[diverged]+x}" ]] || [[ -n "${subset_filters[unrelated]+x}" ]]; }; then
 			if ((tags_mode == 1)); then
-				printf 'Categories behind, ahead and diverged are unavailable with --tags.\n\n' >&2
+				printf 'Categories behind, ahead, diverged and unrelated are unavailable with --tags.\n\n' >&2
 			else
-				printf 'Categories behind, ahead and diverged require local refs for at least one side.\n\n' >&2
+				printf 'Categories behind, ahead, diverged and unrelated require local refs for at least one side.\n\n' >&2
 			fi
 			usage_hint_status
 			exit 1
 		fi
-		if [[ "$direction_mode" == 'ahead-only' ]] && { [[ -n "${subset_filters[behind]+x}" ]] || [[ -n "${subset_filters[diverged]+x}" ]]; }; then
-			printf 'Categories behind and diverged require local refs on both sides.\n\n' >&2
+		if [[ "$direction_mode" == 'ahead-only' ]] && { [[ -n "${subset_filters[behind]+x}" ]] || [[ -n "${subset_filters[diverged]+x}" ]] || [[ -n "${subset_filters[unrelated]+x}" ]]; }; then
+			printf 'Categories behind, diverged and unrelated require local refs on both sides.\n\n' >&2
 			usage_hint_status
 			exit 1
 		fi
-		if [[ "$direction_mode" == 'behind-only' ]] && { [[ -n "${subset_filters[ahead]+x}" ]] || [[ -n "${subset_filters[diverged]+x}" ]]; }; then
-			printf 'Categories ahead and diverged require local refs on both sides.\n\n' >&2
+		if [[ "$direction_mode" == 'behind-only' ]] && { [[ -n "${subset_filters[ahead]+x}" ]] || [[ -n "${subset_filters[diverged]+x}" ]] || [[ -n "${subset_filters[unrelated]+x}" ]]; }; then
+			printf 'Categories ahead, diverged and unrelated require local refs on both sides.\n\n' >&2
 			usage_hint_status
 			exit 1
 		fi
 		if [[ "$direction_mode" == 'full' ]] && [[ -n "${subset_filters[different]+x}" ]]; then
-			printf 'Category different is unavailable when both sides have local refs; use behind, ahead, or diverged.\n\n' >&2
+			printf 'Category different is unavailable when both sides have local refs; use behind, ahead, diverged, or unrelated.\n\n' >&2
 			usage_hint_status
 			exit 1
 		fi
@@ -1276,7 +1296,7 @@ status_command() {
 	compute_ref_categories ref_map_a ref_map_b "$direction_mode" inc_layers exc_layers re_exclude refs_by_cat behind_counts ahead_counts
 	apply_subset_filters subset_filters refs_by_cat
 
-	local -a categories=(missing new different behind ahead diverged same)
+	local -a categories=(missing new different behind ahead diverged unrelated same)
 	local cat
 
 	if ((name_only == 1)); then
@@ -1347,6 +1367,7 @@ status_command() {
 			behind)    _title="Behind: ${remote_b_ref} behind ${remote_a_ref}";         _color="$SECTION_COLOR_BEHIND" ;;
 			ahead)     _title="Ahead: ${remote_b_ref} ahead of ${remote_a_ref}";        _color="$SECTION_COLOR_AHEAD" ;;
 			diverged)  _title="Diverged: between ${remote_a_ref} and ${remote_b_ref}";  _color="$SECTION_COLOR_DIVERGED" ;;
+			unrelated) _title="Unrelated: no common ancestor between ${remote_a_ref} and ${remote_b_ref}"; _color="$SECTION_COLOR_UNRELATED" ;;
 			same)      _title="Same: identical in ${remote_a_ref} and ${remote_b_ref}"; _color="$SECTION_COLOR_SAME" ;;
 		esac
 
@@ -1674,6 +1695,7 @@ align_command() {
 			subset_defaults[behind]=1
 			subset_defaults[ahead]=1
 			subset_defaults[diverged]=1
+			subset_defaults[unrelated]=1
 		else
 			subset_defaults[different]=1
 		fi
@@ -1691,13 +1713,13 @@ align_command() {
 	fi
 
 	# Validate category legality based on direction mode.
-	if ((tags_mode == 1)) && { [[ -n "${subset_filters[behind]+x}" ]] || [[ -n "${subset_filters[ahead]+x}" ]] || [[ -n "${subset_filters[diverged]+x}" ]]; }; then
-		printf 'Categories behind, ahead and diverged are unavailable with --tags.\n\n' >&2
+	if ((tags_mode == 1)) && { [[ -n "${subset_filters[behind]+x}" ]] || [[ -n "${subset_filters[ahead]+x}" ]] || [[ -n "${subset_filters[diverged]+x}" ]] || [[ -n "${subset_filters[unrelated]+x}" ]]; }; then
+		printf 'Categories behind, ahead, diverged and unrelated are unavailable with --tags.\n\n' >&2
 		usage_hint_align
 		exit 1
 	fi
 	if ((tags_mode == 0)) && [[ -n "${subset_filters[different]+x}" ]]; then
-		printf 'Category different is unavailable for branches; use behind, ahead, or diverged.\n\n' >&2
+		printf 'Category different is unavailable for branches; use behind, ahead, diverged, or unrelated.\n\n' >&2
 		usage_hint_align
 		exit 1
 	fi
@@ -1743,7 +1765,7 @@ align_command() {
 	declare -A category_by_ref=()
 	local -a candidates=()
 	local _cat _ref
-	for _cat in missing new different behind ahead diverged; do
+	for _cat in missing new different behind ahead diverged unrelated; do
 		[[ -n "${refs_by_cat[$_cat]}" ]] || continue
 		local -a _cat_refs=()
 		mapfile -t _cat_refs <<< "${refs_by_cat[$_cat]}"

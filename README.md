@@ -7,7 +7,7 @@ A pure Bash tool to compare and align branches and tags across Git remotes.
 - **`git sync status`** — Compare branch or tag tips between your working copy and a remote, or between two remotes. Supports human-readable, porcelain, and name-only output modes.
 - **`git sync align`** — Push branches or tags from a source to a target to bring them in sync. Supports dry-run, force/force-with-lease, and interactive failure recovery.
 - **Include/exclude filtering** — Shell glob patterns (`-i`/`-x`) and pattern files (`-I`/`-X`) to narrow which refs are processed.
-- **Subset filtering** — Restrict output or actions to specific categories: `new`, `missing`, `different`, `behind`, `ahead`, `diverged`, `same`.
+- **Subset filtering** — Restrict output or actions to specific categories: `new`, `missing`, `different`, `behind`, `ahead`, `diverged`, `unrelated`, `same`.
 
 ## Requirements
 
@@ -130,12 +130,13 @@ Each ref is classified into exactly one category:
 | `behind`    | Target is ahead of source (fast-forward possible).   |
 | `ahead`     | Source is ahead of target (fast-forward possible).    |
 | `diverged`  | Source and target have diverged (no fast-forward).    |
+| `unrelated` | Source and target share no common ancestor.           |
 | `different` | Hashes differ but direction cannot be determined.     |
 | `same`      | Identical on both sides.                             |
 
 **Availability by ref type:**
 
-- **Branches** — `behind`, `ahead`, `diverged` are available when both sides have local refs. When one side uses `@remote`, only one direction is detectable (`behind` if source is local, `ahead` if target is local); the rest appear as `different`. When both sides use `@remote`, all differing branches appear as `different`.
+- **Branches** — `behind`, `ahead`, `diverged`, `unrelated` are available when both sides have local refs. When one side uses `@remote`, only one direction is detectable (`behind` if source is local, `ahead` if target is local); the rest appear as `different`. When both sides use `@remote`, all differing branches appear as `different`.
 - **Tags** — Differing tags are always classified as `different` (no direction). Use `--annotated` (`-a`) or `--lightweight` (`-A`) to filter by tag type.
 - `new`, `missing`, and `same` are always available.
 

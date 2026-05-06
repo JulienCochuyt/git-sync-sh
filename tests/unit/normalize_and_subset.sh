@@ -11,7 +11,7 @@ run_tests() {
 
 # --- normalize_subset_category ---
 begin_test 'normalize: valid categories returned as-is'
-for cat in new missing different same behind ahead diverged; do
+for cat in new missing different same behind ahead diverged unrelated; do
 	out="$(normalize_subset_category "$cat")"
 	assert_eq "$cat" "$out" "category $cat"
 done
@@ -21,6 +21,7 @@ begin_test 'normalize: case insensitive'
 assert_eq 'new' "$(normalize_subset_category 'New')" \
 	&& assert_eq 'behind' "$(normalize_subset_category 'BEHIND')" \
 	&& assert_eq 'diverged' "$(normalize_subset_category 'Diverged')" \
+	&& assert_eq 'unrelated' "$(normalize_subset_category 'UnRelated')" \
 	&& end_test_ok
 
 begin_test 'normalize: unknown category fails'

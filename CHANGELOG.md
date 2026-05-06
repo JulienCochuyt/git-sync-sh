@@ -7,14 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- New `unrelated` category for refs whose tips share no common
+  ancestor (e.g. independently initialised repositories pushed to the
+  same branch name on the same remote, or histories created with
+  `git checkout --orphan`). Previously these refs were silently
+  bucketed under `diverged` with misleading
+  `(N behind, M ahead)` counts derived from the full disjoint chain
+  sizes.
+  - Available in `full` direction mode (both sides local).
+  - Included in default `--subset` for both `status` and `align`,
+    consistent with the existing `diverged` treatment.
+  - Recognised by `--subset` (including the `+` / `-` modifiers and
+    bash completion).
+  - Human output: new `Unrelated: no common ancestor between <a> and
+    <b>` section, rendered in red.
+  - Porcelain output: new `unrelated\t<ref>\t<src>\t<tgt>\t-\t-`
+    line; `-` / `-` is emitted for the behind/ahead count columns
+    since they would be meaningless without a common ancestor.
+
+### Changed
+
+- `classify_direction_relation`'s `full` arm now uses a single
+  `git merge-base <a> <b>` call (capturing the ancestor hash) instead
+  of two `git merge-base --is-ancestor` calls, which is what enables
+  the new `unrelated` discrimination. Behaviour for `behind`,
+  `ahead`, and `diverged` is unchanged.
+
 ### Fixed
 
 - `--subset <bad-category>`, `--include-from <unreadable>`, and
-  `--exclude-from <unreadable>` now exit cleanly with status 1 instead of
-  127. The argument parsers were passing the bare names `hint_status` /
-  `hint_align` as the usage-hint callback, but the actual functions are
-  `usage_hint_status` / `usage_hint_align`, so the error path tried to
-  invoke a non-existent command.
+  `--exclude-from <unreadable>` now exit cleanly with status 1 instead
+  of 127. The argument parsers were passing the bare names
+  `hint_status` / `hint_align` as the usage-hint callback, but the
+  actual functions are `usage_hint_status` / `usage_hint_align`, so
+  the error path tried to invoke a non-existent command.
 
 ## [1.1.0] - 2026-04-30
 

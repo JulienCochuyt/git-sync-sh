@@ -178,6 +178,36 @@ assert_eq 1 "${#_b[@]}" 'one behind' \
 	&& assert_eq 2 "${#_d[@]}" 'two different (ahead+diverged fall back)' \
 	&& end_test_ok
 
+# --- unrelated histories in full mode ---
+# Build a second repo with no shared root and fetch its tip into the
+# work repo so both commits are reachable without sharing any ancestor.
+other_dir="${TEST_TMPDIR}/other_for_compute"
+git init -b main "$other_dir" >/dev/null 2>&1
+git -C "$other_dir" commit --allow-empty -m 'O1' >/dev/null 2>&1
+hash_o=$(git -C "$other_dir" rev-parse HEAD)
+git -C "$work" fetch "$other_dir" "$hash_o:refs/git-sync-test/cmp_unrelated" >/dev/null 2>&1
+
+begin_test 'compute: unrelated histories routed to unrelated bucket'
+declare -A src8=([feat]="$tip")
+declare -A tgt8=([feat]="$hash_o")
+local -a inc8=('' '' '') exc8=('' '' '') re8=(0 0 0)
+declare -A rbc8=() bc8=() ac8=()
+
+compute_ref_categories src8 tgt8 'full' inc8 exc8 re8 rbc8 bc8 ac8
+
+local -a _u=()
+rbc_to_array _u "${rbc8[unrelated]}"
+rbc_to_array _v "${rbc8[diverged]}"
+rbc_to_array _d "${rbc8[different]}"
+
+assert_eq 1 "${#_u[@]}" 'one unrelated' \
+	&& assert_eq 'feat' "${_u[0]}" \
+	&& assert_eq 0 "${#_v[@]}" 'not diverged' \
+	&& assert_eq 0 "${#_d[@]}" 'not different' \
+	&& assert_eq '' "${bc8[feat]:-}" 'no behind count for unrelated' \
+	&& assert_eq '' "${ac8[feat]:-}" 'no ahead count for unrelated' \
+	&& end_test_ok
+
 report_results
 }
 run_tests

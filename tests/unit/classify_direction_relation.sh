@@ -82,8 +82,35 @@ begin_test 'behind-only mode: unknown hash returns different'
 out="$(classify_direction_relation "$main_tip" "0000000000000000000000000000000000000000" behind-only)"
 assert_eq 'different' "$out" && end_test_ok
 
-begin_test 'full mode: unknown hash returns diverged (no availability check)'
+begin_test 'full mode: unknown hash returns unrelated (no merge-base reachable)'
 out="$(classify_direction_relation "$main_tip" "0000000000000000000000000000000000000000" full)"
-assert_eq 'diverged' "$out" && end_test_ok
+assert_eq 'unrelated' "$out" && end_test_ok
+
+# --- unrelated: two disjoint repos sharing object DB ---
+# Build a second repo with no shared root, then fetch its tip into the
+# main test repo so both commits are reachable here without sharing
+# any common ancestor.
+other="${TEST_TMPDIR}/other_repo"
+git init -b main "$other" >/dev/null 2>&1
+git -C "$other" commit --allow-empty -m 'O1' >/dev/null 2>&1
+git -C "$other" commit --allow-empty -m 'O2' >/dev/null 2>&1
+hash_o=$(git -C "$other" rev-parse HEAD)
+git -C "$work" fetch "$other" "$hash_o:refs/git-sync-test/other" >/dev/null 2>&1
+
+begin_test 'full mode: unrelated histories detected via merge-base failure'
+out="$(classify_direction_relation "$main_tip" "$hash_o" full)"
+assert_eq 'unrelated' "$out" && end_test_ok
+
+begin_test 'full mode: unrelated is symmetric'
+out="$(classify_direction_relation "$hash_o" "$main_tip" full)"
+assert_eq 'unrelated' "$out" && end_test_ok
+
+begin_test 'ahead-only mode: unrelated falls to different'
+out="$(classify_direction_relation "$main_tip" "$hash_o" ahead-only)"
+assert_eq 'different' "$out" && end_test_ok
+
+begin_test 'behind-only mode: unrelated falls to different'
+out="$(classify_direction_relation "$main_tip" "$hash_o" behind-only)"
+assert_eq 'different' "$out" && end_test_ok
 
 report_results
