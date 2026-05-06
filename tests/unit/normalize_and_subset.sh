@@ -11,7 +11,7 @@ run_tests() {
 
 # --- normalize_subset_category ---
 begin_test 'normalize: valid categories returned as-is'
-for cat in new missing different same behind ahead diverged unrelated; do
+for cat in new missing different same behind ahead diverged unrelated unknown; do
 	out="$(normalize_subset_category "$cat")"
 	assert_eq "$cat" "$out" "category $cat"
 done
@@ -22,9 +22,10 @@ assert_eq 'new' "$(normalize_subset_category 'New')" \
 	&& assert_eq 'behind' "$(normalize_subset_category 'BEHIND')" \
 	&& assert_eq 'diverged' "$(normalize_subset_category 'Diverged')" \
 	&& assert_eq 'unrelated' "$(normalize_subset_category 'UnRelated')" \
+	&& assert_eq 'unknown' "$(normalize_subset_category 'UnKnown')" \
 	&& end_test_ok
 
-begin_test 'normalize: unknown category fails'
+begin_test 'normalize: invalid category fails'
 local rc=0
 normalize_subset_category 'bogus' >/dev/null 2>&1 || rc=$?
 assert_status 1 "$rc" && end_test_ok
@@ -50,7 +51,7 @@ local rc2=0
 (declare -A sp4=() sa4=() sr4=(); add_subset_categories_or_exit 'new,,missing' sp4 sa4 sr4 usage_hint_status) &>/dev/null || rc2=$?
 assert_status 1 "$rc2" && end_test_ok
 
-begin_test 'add_subset: unknown category rejected'
+begin_test 'add_subset: invalid category rejected'
 local rc3=0
 (declare -A sp5=() sa5=() sr5=(); add_subset_categories_or_exit 'new,bogus' sp5 sa5 sr5 usage_hint_status) &>/dev/null || rc3=$?
 assert_status 1 "$rc3" && end_test_ok

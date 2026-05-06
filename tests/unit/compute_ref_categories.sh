@@ -208,6 +208,56 @@ assert_eq 1 "${#_u[@]}" 'one unrelated' \
 	&& assert_eq '' "${ac8[feat]:-}" 'no ahead count for unrelated' \
 	&& end_test_ok
 
+# --- unknown bucket: shallow clone, two truncated tips ---
+shallow_bare="${TEST_TMPDIR}/shallow_bare.git"
+shallow_deep="${TEST_TMPDIR}/shallow_deep_work"
+shallow_clone="${TEST_TMPDIR}/shallow_clone"
+
+git init --bare "$shallow_bare" >/dev/null 2>&1
+create_work_repo "$shallow_deep"
+make_commit "$shallow_deep" 'A1' >/dev/null
+hash_a2=$(make_commit "$shallow_deep" 'A2')
+for _i in 3 4 5 6 7 8 9 10; do
+	make_commit "$shallow_deep" "A${_i}" >/dev/null
+done
+git -C "$shallow_deep" checkout -b side "$hash_a2" >/dev/null 2>&1
+make_commit "$shallow_deep" 'B1' >/dev/null
+make_commit "$shallow_deep" 'B2' >/dev/null
+make_commit "$shallow_deep" 'B3' >/dev/null
+make_commit "$shallow_deep" 'B4' >/dev/null
+make_commit "$shallow_deep" 'B5' >/dev/null
+git -C "$shallow_deep" push "$shallow_bare" 'main:refs/heads/main' >/dev/null 2>&1
+git -C "$shallow_deep" push "$shallow_bare" 'side:refs/heads/side' >/dev/null 2>&1
+
+git clone --depth=2 --branch=main "$shallow_bare" "$shallow_clone" >/dev/null 2>&1
+git -C "$shallow_clone" fetch --depth=2 origin 'refs/heads/side:refs/git-sync-test/side' >/dev/null 2>&1
+
+shallow_main_hash=$(git -C "$shallow_clone" rev-parse refs/remotes/origin/main)
+shallow_side_hash=$(git -C "$shallow_clone" rev-parse refs/git-sync-test/side)
+
+pushd "$shallow_clone" >/dev/null
+begin_test 'compute: shallow tips with unreachable merge-base routed to unknown'
+declare -A src9=([feat]="$shallow_main_hash")
+declare -A tgt9=([feat]="$shallow_side_hash")
+local -a inc9=('' '' '') exc9=('' '' '') re9=(0 0 0)
+declare -A rbc9=() bc9=() ac9=()
+
+compute_ref_categories src9 tgt9 'full' inc9 exc9 re9 rbc9 bc9 ac9
+
+local -a _uk=()
+rbc_to_array _uk "${rbc9[unknown]}"
+rbc_to_array _ur "${rbc9[unrelated]}"
+rbc_to_array _vv "${rbc9[diverged]}"
+
+assert_eq 1 "${#_uk[@]}" 'one unknown' \
+	&& assert_eq 'feat' "${_uk[0]}" \
+	&& assert_eq 0 "${#_ur[@]}" 'not unrelated' \
+	&& assert_eq 0 "${#_vv[@]}" 'not diverged' \
+	&& assert_eq '' "${bc9[feat]:-}" 'no behind count for unknown' \
+	&& assert_eq '' "${ac9[feat]:-}" 'no ahead count for unknown' \
+	&& end_test_ok
+popd >/dev/null
+
 report_results
 }
 run_tests

@@ -138,11 +138,11 @@ assert_contains "$out_p5" $'unrelated\t' \
 	&& assert_contains "$out_p5" $'diverged\t' \
 	&& end_test_ok
 
-begin_test 'status: unknown category in --subset still exits 1'
+begin_test 'status: invalid category in --subset still exits 1'
 local out_bad rc=0
 out_bad="$(bash "$SCRIPT_UNDER_TEST" status -p --subset bogus origin upstream 2>&1)" || rc=$?
-assert_status 1 "$rc" 'unknown category should still exit 1' \
-	&& assert_contains "$out_bad" 'Unknown category: bogus' \
+assert_status 1 "$rc" 'invalid category should still exit 1' \
+	&& assert_contains "$out_bad" 'Invalid category: bogus' \
 	&& end_test_ok
 
 # --- Phase 3: align defaults include unrelated ---

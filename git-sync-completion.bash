@@ -39,8 +39,8 @@ _git_sync_refs() {
 
 _git_sync_complete_subset() {
 	local cur_value="$1" subcommand="$2"
-	local categories="new missing different same behind ahead diverged unrelated"
-	[[ "$subcommand" == "align" ]] && categories="new missing different behind ahead diverged unrelated"
+	local categories="new missing different same behind ahead diverged unrelated unknown"
+	[[ "$subcommand" == "align" ]] && categories="new missing different behind ahead diverged unrelated unknown"
 
 	# Strip prefix already typed (everything up to and including the last comma)
 	local prefix="" stem="$cur_value"

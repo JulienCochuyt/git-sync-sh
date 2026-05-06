@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- New `unknown` category for refs whose ancestry cannot be decided
+  because the local repository is shallow. Previously these refs were
+  silently bucketed under `unrelated`, which (mis)claims that the two
+  histories share no common ancestor at all; with `unknown` we now
+  acknowledge that the would-be common ancestor may merely lie below
+  the shallow boundary.
+  - Detection: when `git merge-base` returns empty, the classifier
+    consults `git rev-parse --is-shallow-repository`; if true, it
+    further checks via `git rev-list --max-parents=0 --count <tip>`
+    whether each tip's walk reaches a parentless commit. If at least
+    one tip is cut off by the shallow boundary, the verdict is
+    `unknown` rather than `unrelated`.
+  - Available in `full` direction mode (both sides local).
+  - Included in default `--subset` for both `status` and `align`,
+    consistent with `unrelated` and `diverged`.
+  - Recognised by `--subset` (including the `+` / `-` modifiers and
+    bash completion).
+  - Human output: new `Unknown: ancestry inconclusive between <a>
+    and <b>` section, rendered in red, followed by a one-line hint
+    suggesting `git fetch --unshallow` / `--deepen=<N>`.
+  - Porcelain output: new `unknown\t<ref>\t<src>\t<tgt>\t-\t-` line,
+    matching the `unrelated` shape — no porcelain schema change.
 - New `unrelated` category for refs whose tips share no common
   ancestor (e.g. independently initialised repositories pushed to the
   same branch name on the same remote, or histories created with
