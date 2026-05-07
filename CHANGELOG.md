@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-05-07
+
 ### Added
 
 - New `unknown` category for refs whose ancestry cannot be decided
