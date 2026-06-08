@@ -214,13 +214,34 @@ assert_status 0 0 'command succeeded'
 git config --unset sync.status.collapse
 end_test_ok
 
-# --- --subset +same overrides collapse threshold ---
-begin_test 'config: --subset +same overrides collapse threshold'
+# --- --subset +same does NOT override collapse threshold ---
+# Additive (+cat) entries only add to the default set; they do not
+# imply "I want to see all of it", so the auto-collapse still applies.
+begin_test 'config: --subset +same respects collapse threshold'
 git config sync.status.collapse 1
 local out15
 out15="$(bash "$SCRIPT_UNDER_TEST" status --subset +same origin upstream 2>&1)"
 local rc15=$?
 assert_status 0 "$rc15" 'command succeeded with --subset +same'
+local rc15a=0
+echo "$out15" | grep -q 'Use --subset=same for detailed list' || rc15a=1
+assert_status 0 "$rc15a" 'same section still collapsed under additive subset'
+git config --unset sync.status.collapse
+end_test_ok
+
+# --- --subset plain (not additive) overrides collapse threshold ---
+begin_test 'config: --subset plain overrides collapse threshold'
+git config sync.status.collapse 1
+local out15c
+out15c="$(bash "$SCRIPT_UNDER_TEST" status --subset same origin upstream 2>&1)"
+local rc15c=$?
+assert_status 0 "$rc15c" 'command succeeded with --subset same'
+local rc15d=0
+echo "$out15c" | grep -q 'Use --subset=same for detailed list' && rc15d=1 || true
+assert_status 0 "$rc15d" 'same section not collapsed under plain explicit subset'
+local rc15e=0
+echo "$out15c" | grep -q '^  main$' || rc15e=1
+assert_status 0 "$rc15e" 'same section lists main under plain explicit subset'
 git config --unset sync.status.collapse
 end_test_ok
 

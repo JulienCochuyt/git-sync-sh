@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `status` human output: an explicit plain `--subset=<cat>` entry now
+  always expands that category's section, bypassing the auto-collapse
+  threshold (`sync.status.collapse`, default 50). Additive `+<cat>`
+  entries still respect the threshold.
+
 ## [1.2.0] - 2026-05-07
 
 ### Added

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 set -euo pipefail
 
-readonly GIT_SYNC_VERSION='1.2.0'
+readonly GIT_SYNC_VERSION='1.2.1-dev'
 
 readonly COLOR_RED=$'\033[31m'
 readonly COLOR_GREEN=$'\033[32m'
@@ -1385,6 +1385,16 @@ status_command() {
 				;;
 		esac
 
+		# When the user explicitly named this category as a plain
+		# --subset entry, bypass the auto-collapse threshold: the
+		# narrowed selection is itself the intent to see details.
+		# Additive (+cat) entries do not bypass — they only add to
+		# the default set, where the threshold still applies.
+		local _user_explicit=0
+		if [[ -n "${subset_plain[$cat]+x}" ]]; then
+			_user_explicit=1
+		fi
+
 		# Title and color.
 		local _title _color
 		case "$cat" in
@@ -1401,7 +1411,7 @@ status_command() {
 
 		((printed_sections == 0)) || printf '\n'
 
-		if should_show_details "$_normally_collapsed" "$_count" \
+		if ((_user_explicit == 1)) || should_show_details "$_normally_collapsed" "$_count" \
 				"$expand_threshold" "$collapse_threshold"; then
 			# Sort and optionally decorate only when showing detail.
 			local -a _sorted=()
